@@ -28,4 +28,4 @@ keyword ==> phrase
         * 輸出時自動切換為英文輸出避免錯誤，結束時自動切回原輸入法
     * 錯誤處理機制
 
-![screensave01](https://hackmd.io/_uploads/Bk8LnZh41l.jpg)
+![screensave01](screensave01.jpg)
