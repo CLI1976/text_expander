@@ -84,7 +84,8 @@ GuiResize(thisGui, MinMax, Width, Height) {
 
     importButton.Move(285, buttonsY)
     exportButton.Move(345, buttonsY)
-    
+    searchButton.Move(405, buttonsY)
+
     WinRedraw(mainGui)
 }
 
@@ -121,6 +122,8 @@ deleteGroupButton := mainGui.Add("Button", "x105 y490", "Delete Group")
 importButton := mainGui.Add("Button", "x285 y410", "Import")
 exportButton := mainGui.Add("Button", "x345 y410", "Export")
 
+; 在主視窗添加搜尋按鈕
+searchButton := mainGui.Add("Button", "x405 y410", "Search")
 
 ; 設置按鈕事件
 addButton.OnEvent("Click", AddNewSnippet)
@@ -128,6 +131,7 @@ editButton.OnEvent("Click", EditSnippet)
 deleteButton.OnEvent("Click", DeleteSnippet)
 importButton.OnEvent("Click", ImportSnippets)  
 exportButton.OnEvent("Click", ExportSnippets)  
+searchButton.OnEvent("Click", ShowSearchWindow)
 
 ; 添加事件處理
 sendRadio.OnEvent("Click", SaveUserSettings)
@@ -874,4 +878,127 @@ for key, value in textSnippets {
         Hotstring(":*:" key " ", handler())
         Hotstring(":*:" key ".", handler())
     }
+}
+
+; 搜尋視窗函數
+ShowSearchWindow(*) {
+    searchGui := Gui("+Owner" . mainGui.Hwnd, "Search Snippets")
+    searchGui.SetFont("s10", "Segoe UI")
+    
+    ; 搜尋選項
+    searchGui.Add("Text", "x10 y10", "Search in:")
+    searchGui.Add("Radio", "x10 y30 vSearchKey Checked", "Keyword")
+    searchGui.Add("Radio", "x90 y30 vSearchPhrase", "Phrase")
+    searchGui.Add("Radio", "x155 y30 vSearchBoth", "Both")
+    
+    ; 搜尋輸入
+    searchGui.Add("Text", "x10 y60", "Search text:")
+    searchEdit := searchGui.Add("Edit", "x10 y80 w300")
+    
+    ; 結果列表
+    resultList := searchGui.Add("ListView", "x10 y120 w500 h300", ["Group", "Keyword", "Phrase"])
+    
+    ; 即時搜尋 - 修改這裡，傳入 searchGui
+    searchEdit.OnEvent("Change", (*) => UpdateSearchResults(searchGui, searchEdit, resultList))
+    
+    ; 雙擊跳轉
+    ; resultList.OnEvent("DoubleClick", (*) => JumpToItem(resultList))
+    ; 定義本地函數來處理雙擊事件
+    HandleDoubleClick(*) {
+        JumpToItem(resultList)
+        searchGui.Destroy()
+    }
+    
+    resultList.OnEvent("DoubleClick", HandleDoubleClick)
+
+    searchGui.Show()
+}
+
+; 更新搜尋結果
+UpdateSearchResults(searchGui, searchEdit, resultList) {
+    searchText := searchEdit.Value
+    if (searchText = "")
+        return
+        
+    resultList.Delete()
+
+    ; 獲取搜尋選項
+    searchInKey := searchGui["SearchKey"].Value
+    searchInPhrase := searchGui["SearchPhrase"].Value
+    searchInBoth := searchGui["SearchBoth"].Value
+    
+    currentNode := TV.GetNext()
+    while currentNode {
+        groupName := TV.GetText(currentNode)
+        childNode := TV.GetChild(currentNode)
+        
+        while childNode {
+            key := TV.GetText(childNode)
+            if textSnippets.Has(key) {
+                value := textSnippets[key]
+                
+                ; 根據搜尋選項決定搜尋範圍
+                matched := false
+                if (searchInKey && InStr(key, searchText))
+                    matched := true
+                else if (searchInPhrase && InStr(value, searchText))
+                    matched := true
+                else if (searchInBoth && (InStr(key, searchText) || InStr(value, searchText)))
+                    matched := true
+                
+                if matched
+                    resultList.Add(, groupName, key, value)
+            }
+            childNode := TV.GetNext(childNode)
+        }
+        currentNode := TV.GetNext(currentNode)
+    }
+}
+
+; 跳轉到項目
+JumpToItem(resultList) {
+    row := resultList.GetNext()
+    if !row
+        return
+        
+    groupName := resultList.GetText(row, 1)
+    key := resultList.GetText(row, 2)
+    
+    ; 處理 TreeView
+    currentNode := TV.GetNext()
+    while currentNode {
+        if (TV.GetText(currentNode) = groupName) {
+            TV.Modify(currentNode, "Expand")
+            childNode := TV.GetChild(currentNode)
+            while childNode {
+                if (TV.GetText(childNode) = key) {
+                    TV.Modify(childNode, "Select")
+                    break
+                }
+                childNode := TV.GetNext(childNode)
+            }
+            break
+        }
+        currentNode := TV.GetNext(currentNode)
+    }
+
+    ; 處理 ListView
+    LV.Delete()  ; 清空當前 ListView
+    ; 更新 ListView 顯示所選群組的內容
+    childNode := TV.GetChild(currentNode)
+    while childNode {
+        itemKey := TV.GetText(childNode)
+        if textSnippets.Has(itemKey)
+            LV.Add(, itemKey, textSnippets[itemKey])
+        childNode := TV.GetNext(childNode)
+    }
+
+    ; 在 ListView 中選中目標項目
+    Loop LV.GetCount() {
+        if (LV.GetText(A_Index, 1) = key) {
+            LV.Modify(A_Index, "Select Focus")  ; 選中並設置焦點
+            break
+        }
+    }
+
 }
