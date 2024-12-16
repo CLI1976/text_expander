@@ -82,6 +82,9 @@ GuiResize(thisGui, MinMax, Width, Height) {
     addGroupButton.Move(5, groupButtonsY)
     deleteGroupButton.Move(105, groupButtonsY)
 
+    importButton.Move(285, buttonsY)
+    exportButton.Move(345, buttonsY)
+    
     WinRedraw(mainGui)
 }
 
@@ -114,12 +117,27 @@ pasteRadio := mainGui.Add("Radio", "x185 y450", "Ctrl+V")
 addGroupButton := mainGui.Add("Button", "x5 y490", "New Group")
 deleteGroupButton := mainGui.Add("Button", "x105 y490", "Delete Group")
 
-addGroupButton.OnEvent("Click", AddNewGroup)
-deleteGroupButton.OnEvent("Click", DeleteGroup)
+; 在按鈕區域添加 Import/Export 按鈕
+importButton := mainGui.Add("Button", "x285 y410", "Import")
+exportButton := mainGui.Add("Button", "x345 y410", "Export")
+
+
+; 設置按鈕事件
+addButton.OnEvent("Click", AddNewSnippet)
+editButton.OnEvent("Click", EditSnippet)
+deleteButton.OnEvent("Click", DeleteSnippet)
+importButton.OnEvent("Click", ImportSnippets)  
+exportButton.OnEvent("Click", ExportSnippets)  
 
 ; 添加事件處理
 sendRadio.OnEvent("Click", SaveUserSettings)
 pasteRadio.OnEvent("Click", SaveUserSettings)
+
+; 添加事件處理
+addGroupButton.OnEvent("Click", AddNewGroup)
+deleteGroupButton.OnEvent("Click", DeleteGroup)
+
+
 
 ; 載入設定
 LoadUserSettings()
@@ -611,6 +629,157 @@ SendWithIMEControl(text)
     }
 }
 
+ExportSnippets(*) {
+    ; 讓用戶選擇儲存位置和格式
+    savePath := FileSelect("S", A_ScriptDir "\snippets_export", "Export Snippets", "Text Files (*.txt; *.ini)")
+    if !savePath
+        return
+        
+    try {
+        ; 使用和 SaveSnippets 相同的格式保存
+        f := FileOpen(savePath, "w", "UTF-8")
+        
+        currentNode := TV.GetNext()
+        while currentNode {
+            nodeName := TV.GetText(currentNode)
+            f.Write("[" nodeName "]`n")
+            
+            childNode := TV.GetChild(currentNode)
+            while childNode {
+                key := TV.GetText(childNode)
+                if textSnippets.Has(key)
+                    f.Write(key "=" StrReplace(textSnippets[key], "`n", "<<NEWLINE>>") "`n")
+                childNode := TV.GetNext(childNode)
+            }
+            f.Write("`n")
+            currentNode := TV.GetNext(currentNode)
+        }
+        f.Close()
+        MsgBox("匯出成功！", "成功")
+    } catch as err {
+        MsgBox("匯出失敗：" err.Message, "錯誤", "Icon!")
+    }
+}
+
+ImportSnippets(*) {
+    ; 讓用戶選擇檔案
+    filePath := FileSelect(1,, "Import Snippets", "Snippet Files (*.txt; *.ini)")
+    if !filePath
+        return
+        
+    ; 詢問匯入模式
+    result := MsgBox("選擇匯入模式：`n`n是 = 疊加模式（保留現有項目）`n否 = 覆蓋模式（清除現有項目）`n取消 = 取消匯入",
+                     "匯入模式", "YesNoCancel Icon?")
+    
+    if (result = "Cancel")
+        return
+        
+    try {
+        ; 檢查檔案格式
+        isValid := ValidateImportFile(filePath)
+        if !isValid {
+            MsgBox("檔案格式不正確！`n請確保檔案包含正確的分組和項目格式。", "錯誤", "Icon!")
+            return
+        }
+
+        ; 備份現有的 snippets.ini
+        snippetFile := A_ScriptDir "\snippets.ini"
+        if FileExist(snippetFile) {
+            backupFile := A_ScriptDir "\snippets_" FormatTime(, "yyyyMMddHHmmss") ".old"
+            try {
+                FileCopy(snippetFile, backupFile)
+            } catch as err {
+                MsgBox("備份失敗：" err.Message, "警告", "Icon!")
+            }
+        }
+        
+        ; 如果是覆蓋模式，清除現有內容
+        if (result = "No") {
+            TV.Delete()
+            LV.Delete()
+            textSnippets.Clear()
+        }
+        
+        ; 讀取並匯入內容
+        currentSection := ""
+        currentNode := 0
+        
+        Loop read filePath, "UTF-8"
+        {
+            line := Trim(A_LoopReadLine)
+            if (line = "")
+                continue
+                
+            if RegExMatch(line, "^\[(.*)\]$", &match) {
+                currentSection := match[1]
+                existingNode := FindGroup(currentSection)
+                currentNode := existingNode ? existingNode : TV.Add(currentSection)
+                continue
+            }
+            
+            parts := StrSplit(line, "=",, 2)
+            if (parts.Length >= 2) {
+                key := parts[1]
+                decodedValue := StrReplace(parts[2], "<<NEWLINE>>", "`n")
+                
+                if (result = "Yes" && textSnippets.Has(key))
+                    continue
+                
+                textSnippets[key] := decodedValue
+                if currentNode
+                    TV.Add(key, currentNode)
+                LV.Add(, key, decodedValue)
+                
+                if !InStr(key, "memo_")
+                    RegisterHotstrings(key)
+            }
+        }
+
+        ; 保存新的設定到 snippets.ini
+        SaveSnippets()
+        
+        MsgBox("匯入成功！`n原有設定已備份為：" backupFile, "成功")
+        
+    } catch as err {
+        MsgBox("匯入失敗：" err.Message, "錯誤", "Icon!")
+    }
+}
+
+; 輔助函數：驗證匯入檔案格式
+ValidateImportFile(filePath) {
+    try {
+        hasGroup := false
+        hasItem := false
+        
+        Loop read filePath, "UTF-8"
+        {
+            line := Trim(A_LoopReadLine)
+            if (line = "")
+                continue
+                
+            if RegExMatch(line, "^\[.*\]$")
+                hasGroup := true
+                
+            if InStr(line, "=")
+                hasItem := true
+        }
+        
+        return hasGroup && hasItem
+    } catch {
+        return false
+    }
+}
+
+; 輔助函數：尋找已存在的分組
+FindGroup(groupName) {
+    currentNode := TV.GetNext()
+    while currentNode {
+        if (TV.GetText(currentNode) = groupName)
+            return currentNode
+        currentNode := TV.GetNext(currentNode)
+    }
+    return 0
+}
 ; 在創建 TreeView 後添加選擇事件處理
 TV.OnEvent("ItemSelect", TVSelect)
 
@@ -683,10 +852,7 @@ TVSelect(*)
         TrayTip("Text Expander", "自動替換已禁用")
 }
 
-; 設置按鈕事件
-addButton.OnEvent("Click", AddNewSnippet)
-editButton.OnEvent("Click", EditSnippet)
-deleteButton.OnEvent("Click", DeleteSnippet)
+
 
 ; 載入已保存的片段
 LoadSnippets()
