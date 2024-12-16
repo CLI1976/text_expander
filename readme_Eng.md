@@ -2,6 +2,8 @@
 
 A text expansion tool developed with AutoHotkey v2, designed for quick input of predefined text snippets.
 
+This project was completed with the assistance of Anthropic's Claude 3.5 Sonnet (2024.04). Claude provided comprehensive programming guidance, code optimization suggestions, and troubleshooting solutions, making significant contributions to the project's development.
+
 ## Features
 
 - Group-based text snippet management
