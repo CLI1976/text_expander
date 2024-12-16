@@ -4,32 +4,131 @@
 ; 存儲文字片段的全局變量
 global textSnippets := Map()
 global hotstringEnabled := true
+; 定義設定檔路徑
+global settingsFile := A_ScriptDir "\textEx_settings.ini"
+
+
+; 讀取用戶設定（在 GUI 初始化時）
+LoadUserSettings()
+{
+    global settingsFile, sendRadio, pasteRadio
+    
+    ; 如果設定檔不存在，創建預設設定
+    if !FileExist(settingsFile) {
+        try {
+            IniWrite("Ctrl+V", settingsFile, "OutputMethod", "DefaultMethod")
+        }
+    }
+    
+    ; 讀取設定
+    try {
+        method := IniRead(settingsFile, "OutputMethod", "DefaultMethod", "Ctrl+V")
+        if (method = "Send") {
+            sendRadio.Value := 1
+        } else {
+            pasteRadio.Value := 1
+        }
+    }
+}
+
+; 保存用戶設定（當選擇改變時）
+SaveUserSettings(*)
+{
+    global settingsFile, sendRadio
+    
+    try {
+        method := sendRadio.Value ? "Send" : "Ctrl+V"
+        IniWrite(method, settingsFile, "OutputMethod", "DefaultMethod")
+    }
+}
 
 ; 創建主視窗
-mainGui := Gui("+Resize", "Text Expander")
+mainGui := Gui("+Resize +MinSize800x600", "Text Expander")
 mainGui.SetFont("s10", "Segoe UI")
 
+GuiResize(thisGui, MinMax, Width, Height) {
+    if MinMax = -1  ; 視窗最小化
+        return
+    
+    ; TreeView 固定 150 寬度
+    treeWidth := 180
+    listWidth := Width - treeWidth - 20  ; 總寬度減去 TreeView 寬度和邊距
+    controlHeight := Height - 100  ; 減去按鈕區域的高度
+    
+    ; 更新控件大小和位置
+    TV.Move(5, 5, treeWidth - 10, controlHeight)
+    LV.Move(treeWidth + 5, 5, listWidth - 15, controlHeight)
+
+    ; 動態調整欄寬
+    LV.ModifyCol(1, 100)
+    LV.ModifyCol(2, listWidth - 120)  ; 總寬度減去 Keyword 寬度和一些邊距
+    
+    ; 更新按鈕位置
+    buttonsY := controlHeight + 10
+    addButton.Move(5, buttonsY)
+    editButton.Move(85, buttonsY)
+    deleteButton.Move(135, buttonsY)
+    toggleButton.Move(225, buttonsY)
+    
+    ; 更新 radio 按鈕位置
+    radioY := buttonsY + 35
+    mainGui.GetPos(,, &guiWidth)
+    outputMethodText.Move(15, radioY)
+    sendRadio.Move(85, radioY)
+    pasteRadio.Move(185, radioY)
+    
+    ; 更新分組按鈕位置
+    groupButtonsY := radioY + 20
+    addGroupButton.Move(5, groupButtonsY)
+    deleteGroupButton.Move(105, groupButtonsY)
+
+    WinRedraw(mainGui)
+}
+
+; 註冊視窗大小改變事件
+mainGui.OnEvent("Size", GuiResize)
+
+
 ; 左側樹狀視圖
-TV := mainGui.Add("TreeView", "w200 h400 vMyTreeView")
+TV := mainGui.Add("TreeView", "x5 y5 w180 h400")
 
 ; 右側列表視圖
-LV := mainGui.Add("ListView", "x+10 w400 h400", ["Keyword", "Phrase"])
+LV := mainGui.Add("ListView", "x195 y5 w545 h400", ["Keyword", "Phrase"])
+LV.ModifyCol(1, 100)  ; Keyword 欄寬 150
+LV.ModifyCol(2, 380)  ; Phrase 欄寬 380
 
 ; 添加按鈕
-addButton := mainGui.Add("Button", "xm y+10", "Add New")
-editButton := mainGui.Add("Button", "x+10 yp", "Edit")
-deleteButton := mainGui.Add("Button", "x+10 yp", "Delete")
-toggleButton := mainGui.Add("Button", "x+10 yp", "ON")  ; 新增開關按鈕
+addButton := mainGui.Add("Button", "x5 y410", "Add New")
+editButton := mainGui.Add("Button", "x85 y410", "Edit")
+deleteButton := mainGui.Add("Button", "x135 y410", "Delete")
+toggleButton := mainGui.Add("Button", "x225 y410", "ON")
+
 ; 在 GUI 初始化時添加 Radio 按鈕（放在 toggleButton 之後）
-mainGui.Add("Text", "x10 y+10", "輸出方式：")
-sendRadio := mainGui.Add("Radio", "xp+70 yp", "Send Text")
-pasteRadio := mainGui.Add("Radio", "x+10 yp", "Ctrl+V")
-pasteRadio.value := 1  ; 預設選擇 Send Text
+; 在 GUI 初始化時添加 Radio 按鈕並設置事件處理
+; 輸出方式選擇 (初始位置)
+outputMethodText := mainGui.Add("Text", "x15 y450", "輸出方式：")
+sendRadio := mainGui.Add("Radio", "x85 y450", "Send Text")
+pasteRadio := mainGui.Add("Radio", "x185 y450", "Ctrl+V")
+
+; 分組按鈕 (初始位置)
+addGroupButton := mainGui.Add("Button", "x5 y490", "New Group")
+deleteGroupButton := mainGui.Add("Button", "x105 y490", "Delete Group")
+
+addGroupButton.OnEvent("Click", AddNewGroup)
+deleteGroupButton.OnEvent("Click", DeleteGroup)
+
+; 添加事件處理
+sendRadio.OnEvent("Click", SaveUserSettings)
+pasteRadio.OnEvent("Click", SaveUserSettings)
+
+; 載入設定
+LoadUserSettings()
 
 ; 初始化一些示例資料夾和項目
 rootFolder := TV.Add("Email Templates")
 thanksFolder := TV.Add("Thanks", rootFolder)
 TV.Add("Messages", rootFolder)
+
 
 
 ; 開關按鈕事件處理
@@ -150,12 +249,6 @@ AddNewSnippet(*)
     addGui.Show()
 }
 
-
-; 添加分組管理按鈕
-addGroupButton := mainGui.Add("Button", "x10 y+5", "New Group")
-deleteGroupButton := mainGui.Add("Button", "x+10 yp", "Delete Group")  ; 在 New Group 按鈕旁邊添加
-addGroupButton.OnEvent("Click", AddNewGroup)
-deleteGroupButton.OnEvent("Click", DeleteGroup)
 
 
 ; 添加新增分組功能
