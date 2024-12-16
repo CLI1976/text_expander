@@ -45,4 +45,4 @@
 - 可隨時使用 Ctrl+Alt+S 或界面按鈕開關功能
 - 視窗大小可自由調整，介面會自動適應
 
-![screensave01](screensave01.jpg)
+![screenshot](screenshot.png)
