@@ -20,6 +20,11 @@ addButton := mainGui.Add("Button", "xm y+10", "Add New")
 editButton := mainGui.Add("Button", "x+10 yp", "Edit")
 deleteButton := mainGui.Add("Button", "x+10 yp", "Delete")
 toggleButton := mainGui.Add("Button", "x+10 yp", "ON")  ; 新增開關按鈕
+; 在 GUI 初始化時添加 Radio 按鈕（放在 toggleButton 之後）
+mainGui.Add("Text", "x10 y+10", "輸出方式：")
+sendRadio := mainGui.Add("Radio", "xp+70 yp", "Send Text")
+pasteRadio := mainGui.Add("Radio", "x+10 yp", "Ctrl+V")
+pasteRadio.value := 1  ; 預設選擇 Send Text
 
 ; 初始化一些示例資料夾和項目
 rootFolder := TV.Add("Email Templates")
@@ -473,37 +478,44 @@ CreateHotstring(key, value)
 }
 
 
-; 控制輸入法的文字輸出函數
+; 修改 SendWithIMEControl 函數以支援兩種模式
 SendWithIMEControl(text)
 {
-    ; 保存原始設定
-    oldDelay := A_KeyDelay
-    oldMode := A_SendMode
-    
-    ; 設定最快速的發送模式
-    SetKeyDelay(0)
-    SendMode("Input")
-    
-    ; 保存當前輸入法狀態
-    prevIME := DllCall("GetKeyboardLayout", "UInt", DllCall("GetWindowThreadProcessId", "UInt", WinExist("A"), "UInt", 0))
-    
-    ; 切換到英文輸入法
-    SendMessage(0x50, 0, 0x4090409,, "A")
-    Sleep(50)
-    
-    ; 發送文字
-    Send(text)
-    
-    ; 根據文字長度計算延遲
-    delay := 50 + (StrLen(text) * 6.5)
-    Sleep(delay)
-    
-    ; 恢復原始設定
-    SetKeyDelay(oldDelay)
-    SendMode(oldMode)
-    
-    ; 恢復輸入法
-    PostMessage(0x50, 0, prevIME,, "A")
+    if (pasteRadio.Value) {
+        ; 使用剪貼板方式
+        backupClipboard := ClipboardAll()
+        A_Clipboard := text
+        Sleep(50)
+        
+        Send("^v")
+        
+        delay := 50 + (StrLen(text) * 6.5)
+        Sleep(delay)
+        
+        A_Clipboard := backupClipboard
+    } else {
+        ; 使用原本的 Send 方式
+        oldDelay := A_KeyDelay
+        oldMode := A_SendMode
+        
+        SetKeyDelay(0)
+        SendMode("Input")
+        
+        prevIME := DllCall("GetKeyboardLayout", "UInt", DllCall("GetWindowThreadProcessId", "UInt", WinExist("A"), "UInt", 0))
+        
+        SendMessage(0x50, 0, 0x4090409,, "A")
+        Sleep(50)
+        
+        Send(text)
+        
+        delay := 50 + (StrLen(text) * 5)
+        Sleep(delay)
+        
+        SetKeyDelay(oldDelay)
+        SendMode(oldMode)
+        
+        PostMessage(0x50, 0, prevIME,, "A")
+    }
 }
 
 ; 在創建 TreeView 後添加選擇事件處理
