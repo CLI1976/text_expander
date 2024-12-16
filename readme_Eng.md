@@ -44,3 +44,5 @@ A text expansion tool developed with AutoHotkey v2, designed for quick input of 
 - Ctrl+V mode is recommended for better performance
 - Toggle function anytime with Ctrl+Alt+S or GUI button
 - Window size is freely adjustable with responsive interface
+
+![screenshot](Screenshot.png)
