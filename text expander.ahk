@@ -100,6 +100,7 @@ TV := mainGui.Add("TreeView", "x5 y5 w180 h400")
 LV := mainGui.Add("ListView", "x195 y5 w545 h400", ["Keyword", "Phrase"])
 LV.ModifyCol(1, 100)  ; Keyword 欄寬 150
 LV.ModifyCol(2, 380)  ; Phrase 欄寬 380
+LV.OnEvent("DoubleClick", (*) => EditSnippet())  ; 添加這行
 
 ; 添加按鈕
 addButton := mainGui.Add("Button", "x5 y410", "Add New")
@@ -209,8 +210,7 @@ UnregisterHotstrings(key)
 }
 
 ; 添加新片段時，需要選擇分組
-AddNewSnippet(*)
-{
+AddNewSnippet(*) {
     ; 檢查是否有選擇分組
     selectedNode := TV.GetSelection()
     if !selectedNode {
@@ -223,32 +223,68 @@ AddNewSnippet(*)
         selectedNode := TV.GetParent(selectedNode)
     
     groupName := TV.GetText(selectedNode)
+
+    ; 獲取主視窗尺寸
+    mainGui.GetPos(&mainX, &mainY, &mainWidth, &mainHeight)
     
-    addGui := Gui()
-    addGui.Owner := mainGui
+    ; 計算新視窗尺寸 (主視窗的 0.8 倍)
+    addWidth := Round(mainWidth * 0.8)
+    addHeight := Round(mainHeight * 0.8)
+    
+    addGui := Gui("+Owner" . mainGui.Hwnd . " +Resize", "Add New Snippet")
     addGui.SetFont("s10", "Segoe UI")
     
-    addGui.Add("Text",, "Group:")
-    addGui.Add("Text",, groupName)
+    ; 計算控件尺寸
+    contentWidth := addWidth - 40  ; 減去邊距
+    keywordWidth := Min(contentWidth - 20, 300)  ; keyword 輸入框限制最大寬度
+    phraseWidth := contentWidth - 20
+    phraseHeight := addHeight - 170  ; 保留空間給其他控件
     
-    addGui.Add("Text", "xm y+10", "Keyword:")
-    keywordEdit := addGui.Add("Edit", "w200")
+    ; 調整控件位置和大小
+    addGui.Add("Text",, "Group:  " groupName)
     
+    ; addGui.Add("Text", "xm y+10", "Keyword:")
+    ; keywordEdit := addGui.Add("Edit", "w" keywordWidth)
+    addGui.Add("Text", "xm", "Keyword:")
+    keywordEdit := addGui.Add("Edit", "w" keywordWidth " yp-3")  ; yp-3 微調對齊
+    helpButton := addGui.Add("Button", "x+5 yp h23", "?")  ; 緊接在 Edit 後面
+    ; 幫助按鈕事件
+    helpButton.OnEvent("Click", ShowDynamicTags)
+
     addGui.Add("Text", "xm y+10", "Phrase:")
-    phraseEdit := addGui.Add("Edit", "w300 h100")
+    phraseEdit := addGui.Add("Edit", "w" phraseWidth " h" phraseHeight)
     
     saveButton := addGui.Add("Button", "xm y+10", "Save")
     
-    SaveNewHandler(*)
-    {
+    ; 添加視窗大小改變事件處理
+    AddGuiSize(thisGui, MinMax, Width, Height) {
+        if MinMax = -1  ; 視窗最小化
+            return
+            
+        ; 調整 Phrase 編輯框的大小
+        newWidth := Width - 40
+        newHeight := Height - 170
+        phraseEdit.Move(,, newWidth, newHeight)
+        
+        ; 獲取 phraseEdit 的位置
+        phraseEdit.GetPos(&phraseX, &phraseY)
+        
+        ; 調整 Save 按鈕的位置
+        saveButton.Move(, phraseY + newHeight + 10)
+        
+        ; 強制重繪
+        WinRedraw(thisGui)
+    }
+    
+    addGui.OnEvent("Size", AddGuiSize)
+    
+    SaveNewHandler(*) {
         keyword := keywordEdit.Value
         phrase := phraseEdit.Value
         
         if (phrase != "") {  ; 只檢查 phrase 是否有內容
             if (keyword == "") {
-                ; 為 memo 生成唯一識別碼
                 keyword := "memo_" A_Now "_" Random(1000, 9999)
-                ; 直接使用識別碼作為顯示文字
                 displayText := keyword
             } else {
                 displayText := keyword
@@ -258,7 +294,6 @@ AddNewSnippet(*)
             LV.Add(, displayText, phrase)
             TV.Add(displayText, selectedNode)
             
-            ; 只有當不是 memo_ 開頭的才註冊熱字串
             if !InStr(keyword, "memo_")
                 RegisterHotstrings(keyword)
                 
@@ -268,11 +303,41 @@ AddNewSnippet(*)
     }
     
     saveButton.OnEvent("Click", SaveNewHandler)
+    
+    ; 設定視窗大小並顯示
+    addGui.Move(, , addWidth + 40, addHeight)
     addGui.Show()
 }
 
+ShowDynamicTags(*) {
+    helpGui := Gui("+Owner" . mainGui.Hwnd, "Dynamic Tags Help")
+    helpGui.SetFont("s10", "Segoe UI")
 
+    ; 創建一個固定寬度字體的文字區域
+    helpText := "
+    (
+    標記             說明                   範例
+    ============================================================
+    {TODAY}          今天日期 (yyyy/MM/dd)  Report dated {TODAY}
+    {TODAY_SHORT}    今天日期 (yy/MM/dd)    Doc_{TODAY_SHORT}
+    {YESTERDAY}      昨天日期               Previous study on {YESTERDAY}
+    {TOMORROW}       明天日期               Follow up on {TOMORROW}
+    {TIME}           現在時間 (HH:mm)       Reviewed at {TIME}
+    {TIME_FULL}      現在時間 (HH:mm:ss)    Timestamp: {TIME_FULL}
+    {WEEKDAY}        今天星期名稱           Meeting on {WEEKDAY}
+    {MONTH}          今天月份名稱           Report for {MONTH}
+    {YEAR}           今天年份               Annual review {YEAR}
+    )"
 
+    ; 使用等寬字體的多行編輯框
+    helpEdit := helpGui.Add("Edit", "ReadOnly w550 h200", helpText)
+    helpEdit.SetFont("s10", "Consolas")  ; 使用等寬字體確保對齊
+
+    ; 添加確定按鈕
+    helpGui.Add("Button", "Default w80", "OK").OnEvent("Click", (*) => helpGui.Destroy())
+
+    helpGui.Show()
+}
 ; 添加新增分組功能
 AddNewGroup(*)
 {
@@ -334,38 +399,70 @@ DeleteGroup(*)
 }
 
 ; 編輯片段視窗
-EditSnippet(*)
-{
+EditSnippet(*) {
     if (LV.GetCount("Selected") = 0) {
         MsgBox("請先選擇要編輯的項目", "提示")
         return
     }
 
+    ; 獲取主視窗尺寸
+    mainGui.GetPos(&mainX, &mainY, &mainWidth, &mainHeight)
+    
+    ; 計算編輯視窗尺寸 (主視窗的 0.8 倍)
+    editWidth := Round(mainWidth * 0.8)
+    editHeight := Round(mainHeight * 0.8)
+    
     row := LV.GetNext()
     oldKeyword := LV.GetText(row, 1)
     oldPhrase := LV.GetText(row, 2)
     
-    ; 驗證當前熱字串狀態
     if !textSnippets.Has(oldKeyword) {
         MsgBox("警告：找不到原有的熱字串，建議重新啟動程式", "錯誤")
         return
     }
     
-    editGui := Gui()
-    editGui.Owner := mainGui
+    ; 創建編輯視窗並設定大小
+    editGui := Gui("+Owner" . mainGui.Hwnd . " +Resize", "Edit Snippet")
     editGui.SetFont("s10", "Segoe UI")
     
+    ; 計算控件尺寸
+    editWidth -= 40  ; 減去邊距
+    keywordWidth := Min(editWidth - 20, 300)  ; keyword 輸入框限制最大寬度
+    phraseWidth := editWidth - 20
+    phraseHeight := editHeight - 150  ; 保留空間給其他控件
+    
+    ; 調整控件位置和大小
     editGui.Add("Text",, "Keyword:")
-    keywordEdit := editGui.Add("Edit", "w200", oldKeyword)
+    keywordEdit := editGui.Add("Edit", "w" keywordWidth, oldKeyword)
     
     editGui.Add("Text", "xm y+10", "Phrase:")
-    phraseEdit := editGui.Add("Edit", "w300 h100", oldPhrase)
+    phraseEdit := editGui.Add("Edit", "w" phraseWidth " h" phraseHeight, oldPhrase)
     
     saveButton := editGui.Add("Button", "xm y+10", "Save")
 
-    ; 修改 SaveEditHandler
-    SaveEditHandler(*)
-    {
+    ; 添加視窗大小改變事件處理
+    EditGuiSize(thisGui, MinMax, Width, Height) {
+        if MinMax = -1  ; 視窗最小化
+            return
+            
+        ; 只調整 Phrase 編輯框的大小
+        newWidth := Width - 40
+        newHeight := Height - 150
+        phraseEdit.Move(,, newWidth, newHeight)
+
+        ; 獲取 phraseEdit 的位置
+        phraseEdit.GetPos(&phraseX, &phraseY)
+    
+        ; 調整 Save 按鈕的位置 (Y值跟著 phrase 編輯框的底部)
+        saveButton.Move(, phraseY + newHeight + 10)
+            
+         ; 強制重繪
+        WinRedraw(thisGui)
+    }
+    
+    editGui.OnEvent("Size", EditGuiSize)
+    
+    SaveEditHandler(*) {
         keyword := keywordEdit.Value
         phrase := phraseEdit.Value
 
@@ -411,11 +508,14 @@ EditSnippet(*)
             }
             MsgBox(debugInfo)
         
-           editGui.Destroy()
+            editGui.Destroy()
         }
     }
-
+    
     saveButton.OnEvent("Click", SaveEditHandler)
+    
+    ; 設定視窗大小並顯示
+    editGui.Move(, , editWidth + 40, editHeight)
     editGui.Show()
 }
 
@@ -596,6 +696,23 @@ CreateHotstring(key, value)
 ; 修改 SendWithIMEControl 函數以支援兩種模式
 SendWithIMEControl(text)
 {
+    ; 支援多種動態內容
+    replacements := Map(
+        "{TODAY}", FormatTime(, "yyyy/MM/dd"),
+        "{TODAY_SHORT}", FormatTime(, "yy/MM/dd"),
+        "{TIME}", FormatTime(, "HH:mm"),
+        "{TIME_FULL}", FormatTime(, "HH:mm:ss"),
+        "{YESTERDAY}", FormatTime(DateAdd(A_Now, -1, "days"), "yyyy/MM/dd"),
+        "{TOMORROW}", FormatTime(DateAdd(A_Now, 1, "days"), "yyyy/MM/dd"),
+        "{WEEKDAY}", FormatTime(, "dddd"),  ; 完整星期名稱
+        "{MONTH}", FormatTime(, "MMMM"),    ; 完整月份名稱
+        "{YEAR}", FormatTime(, "yyyy")      ; 完整年份
+    )
+        
+    ; 處理所有動態標記
+    for tag, value in replacements
+        text := StrReplace(text, tag, value)
+
     if (pasteRadio.Value) {
         ; 使用剪貼板方式
         backupClipboard := ClipboardAll()
