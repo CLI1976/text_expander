@@ -48,6 +48,8 @@
 - 可隨時使用 Ctrl+Alt+S 或界面按鈕開關功能
 - 視窗大小可自由調整，介面會自動適應
 
+https://buymeacoffee.com/hw98188d
+
 ![screenshot](Screenshot.png)
 
 <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="hw98188d" data-color="#FFDD00" data-emoji="☕" data-font="Poppins" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff" ></script>
