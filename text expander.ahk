@@ -35,6 +35,11 @@ global textSnippets := Map()
 global hotstringEnabled := true
 global settingsFile := A_ScriptDir "\textEx_settings.ini"
 
+global treeWidth := 180
+global listWidth := 0
+global currentHeight := 600  
+global controlHeight := 0
+
 ; Settings functions
 LoadUserSettings() {
     global settingsFile, sendRadio, pasteRadio
@@ -78,10 +83,19 @@ mainGui.SetFont("s10", "Segoe UI")
 TV := mainGui.Add("TreeView", "x5 y5 w180 h400")
 
 ; 右側列表視圖
-LV := mainGui.Add("ListView", "x195 y5 w545 h400", ["Group Path", "Keyword", "Phrase"])
-LV.ModifyCol(1, 150)  ; Group Path 欄寬
-LV.ModifyCol(2, 100)  ; Keyword 欄寬
-LV.ModifyCol(3, 280)  ; Phrase 欄寬
+; 右側分割為兩個部分
+; 保持原有佈局，調整視覺樣式
+LV := mainGui.Add("ListView", "x195 y5 w545 h200", ["Group Path", "Keyword", "Phrase"])
+LV.SetFont("s10", "Segoe UI")
+
+; 預覽區增加邊框和字體設定
+previewEdit := mainGui.Add("Edit", "x195 y210 w545 h195 ReadOnly -E0x200")  ; -E0x200 移除灰色背景
+previewEdit.SetFont("s11", "Segoe UI")
+
+; 可選：美化欄寬比例
+LV.ModifyCol(1, 10)  ; Group Path
+LV.ModifyCol(2, 160)  ; Keyword
+LV.ModifyCol(3, 360)  ; Phrase
 
 ; 添加按鈕
 addButton := mainGui.Add("Button", "x5 y410", "Add New")
@@ -93,6 +107,11 @@ toggleButton := mainGui.Add("Button", "x225 y410", "ON")
 outputMethodText := mainGui.Add("Text", "x15 y450", "輸出方式：")
 sendRadio := mainGui.Add("Radio", "x85 y450", "Send Text")
 pasteRadio := mainGui.Add("Radio", "x185 y450", "Ctrl+V")
+
+; 新增顯示模式選擇
+displayModeText := mainGui.Add("Text", "x305 y450", "顯示模式：")
+viewRadio := mainGui.Add("Radio", "x385 y450 Checked", "ListView")
+previewRadio := mainGui.Add("Radio", "x465 y450", "Preview")
 
 ; 分組按鈕
 addGroupButton := mainGui.Add("Button", "x5 y490", "New Group")
@@ -118,26 +137,47 @@ exportButton.OnEvent("Click", ExportSnippets)
 searchButton.OnEvent("Click", ShowSearchWindow)
 sendRadio.OnEvent("Click", SaveUserSettings)
 pasteRadio.OnEvent("Click", SaveUserSettings)
+
+viewRadio.OnEvent("Click", SwitchDisplayMode)
+previewRadio.OnEvent("Click", SwitchDisplayMode)
+
 addGroupButton.OnEvent("Click", AddNewGroup)
 deleteGroupButton.OnEvent("Click", DeleteGroup)
 
 ; GUI 事件處理函數
 GuiResize(thisGui, MinMax, Width, Height) {
-    if MinMax = -1  ; 視窗最小化
+        if MinMax = -1  ; 視窗最小化
         return
     
     ; TreeView 固定寬度
+    currentHeight := Height  ; 保存當前高度
     treeWidth := 180
     listWidth := Width - treeWidth - 20
     controlHeight := Height - 100
     
     ; 更新控件大小和位置
     TV.Move(5, 5, treeWidth - 10, controlHeight)
-    LV.Move(treeWidth + 5, 5, listWidth - 15, controlHeight)
+
+    if (viewRadio.Value) {
+        ; ListView 模式
+        LV.Move(treeWidth + 5, 5, listWidth - 15, controlHeight)
+        previewEdit.Visible := false
+    } else {
+        ; Preview 模式
+        listHeight := Floor(controlHeight / 3)
+        LV.Move(treeWidth + 5, 5, listWidth - 15, listHeight)
+        previewEdit.Visible := true
+        previewEdit.Move(treeWidth + 5, listHeight + 10, listWidth - 15, controlHeight - listHeight - 10)
+    }
+    ; ListView 和 Preview 各佔右側一半高度
+    ; listHeight := Floor(controlHeight / 2)
+    ; LV.Move(treeWidth + 5, 5, listWidth - 15, listHeight)
+    ; previewEdit.Move(treeWidth + 5, listHeight + 10, listWidth - 15, listHeight - 10)
+    
 
     ; 動態調整欄寬
-    pathWidth := 100
-    keywordWidth := 75
+    pathWidth := 10
+    keywordWidth := 160
     phraseWidth := listWidth - pathWidth - keywordWidth - 20
 
     LV.ModifyCol(1, pathWidth)
@@ -156,6 +196,10 @@ GuiResize(thisGui, MinMax, Width, Height) {
     outputMethodText.Move(15, radioY)
     sendRadio.Move(85, radioY)
     pasteRadio.Move(185, radioY)
+    displayModeText.Move(305, radioY)
+    viewRadio.Move(385, radioY)
+    previewRadio.Move(465, radioY)
+
     
     ; 更新分組按鈕位置
     groupButtonsY := radioY + 20
@@ -165,7 +209,6 @@ GuiResize(thisGui, MinMax, Width, Height) {
     importButton.Move(285, buttonsY)
     exportButton.Move(345, buttonsY)
     searchButton.Move(405, buttonsY)
-
     WinRedraw(mainGui)
 }
 
@@ -192,6 +235,15 @@ TVSelect(*) {
 LVSelect(*) {
     if TV.GetSelection()
         TV.Modify(TV.GetSelection(), "-Select")
+    
+    ; 更新預覽
+    row := LV.GetNext()
+    if row {
+        phrase := LV.GetText(row, 3)  ; 第3欄是 Phrase
+        previewEdit.Value := phrase
+    }
+    else
+        previewEdit.Value := ""
 }
 
 ; === GUI 操作函數 ===
@@ -294,13 +346,16 @@ EditSnippet(*) {
     editHeight := Round(mainHeight * 0.8)
     
     row := LV.GetNext()
+    oldGroupPath := LV.GetText(row, 1)  ; 儲存群組路徑
     oldKeyword := LV.GetText(row, 2)
     oldPhrase := LV.GetText(row, 3)
     
-    if !textSnippets.Has(oldKeyword) {
-        MsgBox("警告：找不到原有的熱字串，建議重新啟動程式", "錯誤")
-        return
-    }
+    ; Debug 記錄
+    FileAppend("=== 開始編輯 ===`n", A_ScriptDir "\edit_log.txt")
+    FileAppend("原始值：`n", A_ScriptDir "\edit_log.txt")
+    FileAppend("群組路徑: " oldGroupPath "`n", A_ScriptDir "\edit_log.txt")
+    FileAppend("關鍵字: " oldKeyword "`n", A_ScriptDir "\edit_log.txt")
+    FileAppend("短語: " oldPhrase "`n", A_ScriptDir "\edit_log.txt")
     
     editGui := Gui("+Owner" . mainGui.Hwnd . " +Resize", "Edit Snippet")
     editGui.SetFont("s10", "Segoe UI")
@@ -310,6 +365,7 @@ EditSnippet(*) {
     phraseWidth := editWidth - 20
     phraseHeight := editHeight - 150
     
+    editGui.Add("Text",, "Group: " oldGroupPath)
     editGui.Add("Text",, "Keyword:")
     keywordEdit := editGui.Add("Edit", "w" keywordWidth, oldKeyword)
     
@@ -325,46 +381,66 @@ EditSnippet(*) {
         newWidth := Width - 40
         newHeight := Height - 150
         phraseEdit.Move(,, newWidth, newHeight)
-
         phraseEdit.GetPos(&phraseX, &phraseY)
         saveButton.Move(, phraseY + newHeight + 10)
-            
         WinRedraw(thisGui)
     }
     
     editGui.OnEvent("Size", EditGuiSize)
     
+    if FileExist(A_ScriptDir "\edit_log.txt")
+        FileDelete(A_ScriptDir "\edit_log.txt")
+
     SaveEditHandler(*) {
         keyword := keywordEdit.Value
         phrase := phraseEdit.Value
-
+        
+        FileAppend("=== 儲存編輯 ===`n", A_ScriptDir "\edit_log.txt")
+        FileAppend("新值：`n", A_ScriptDir "\edit_log.txt")
+        FileAppend("關鍵字: " keyword "`n", A_ScriptDir "\edit_log.txt")
+        FileAppend("短語: " phrase "`n", A_ScriptDir "\edit_log.txt")
+    
         if (keyword != "" && phrase != "") {
-            if (oldKeyword != keyword) {
-                try {
-                    Hotstring(":*:" oldKeyword " ",, "Off")
-                    Hotstring(":*:" oldKeyword ".",, "Off")
-                }
-                textSnippets.Delete(oldKeyword)
-            }
-
-            LV.Modify(row,, keyword, phrase)
-
-            currentNode := TV.GetNext(0)
-            while currentNode {
-                childNode := TV.GetChild(currentNode)
-                while childNode {
-                    if (TV.GetText(childNode) = oldKeyword) {
-                        TV.Modify(childNode,, keyword)
-                        break
-                    }
-                    childNode := TV.GetNext(childNode)
-                }
-                currentNode := TV.GetNext(currentNode)
-            }
-
+            ; 1. 在 textSnippets 中進行更新
             textSnippets[keyword] := phrase
-            CreateHotstring(keyword, phrase)
+            FileAppend("新關鍵字/短語已加入 Map`n", A_ScriptDir "\edit_log.txt")
+            
+            if (oldKeyword != keyword) {
+                textSnippets.Delete(oldKeyword)
+                FileAppend("舊關鍵字已從 Map 中刪除`n", A_ScriptDir "\edit_log.txt")
+            }
+            
+            ; 2. 更新 TreeView
+            ; 首先找到對應的節點
+            pathParts := StrSplit(oldGroupPath, "\")
+            currentNode := TV.GetNext()
+            found := false
+            
+            while currentNode && !found {
+                if (TV.GetText(currentNode) = oldKeyword) {
+                    TV.Modify(currentNode,, keyword)
+                    found := true
+                    FileAppend("在頂層找到並更新節點`n", A_ScriptDir "\edit_log.txt")
+                } else {
+                    found := UpdateTreeNodeRecursive(currentNode, oldKeyword, keyword)
+                }
+                currentNode := found ? 0 : TV.GetNext(currentNode)
+            }
+            
+            ; 3. 更新 ListView
+            LV.Modify(row,, oldGroupPath, keyword, phrase)
+            FileAppend("ListView 已更新`n", A_ScriptDir "\edit_log.txt")
+            
+            ; 4. 如果不是 memo_ 項目，更新熱字串
+            if !InStr(keyword, "memo_") {
+                CreateHotstring(keyword, phrase)
+                FileAppend("熱字串已更新`n", A_ScriptDir "\edit_log.txt")
+            }
+            
+            ; 5. 保存所有更改
             SaveSnippets()
+            FileAppend("所有更改已保存`n", A_ScriptDir "\edit_log.txt")
+            
             editGui.Destroy()
         }
     }
@@ -373,6 +449,27 @@ EditSnippet(*) {
     
     editGui.Move(, , editWidth + 40, editHeight)
     editGui.Show()
+}
+
+; 遞迴更新 TreeView 節點的輔助函數
+UpdateTreeNodeRecursive(parentNode, oldText, newText) {
+    if !parentNode
+        return false
+        
+    childNode := TV.GetChild(parentNode)
+    while childNode {
+        if (TV.GetText(childNode) = oldText) {
+            TV.Modify(childNode,, newText)
+            FileAppend("在子層找到並更新節點: " oldText " -> " newText "`n", A_ScriptDir "\edit_log.txt")
+            return true
+        }
+        
+        if (UpdateTreeNodeRecursive(childNode, oldText, newText))
+            return true
+            
+        childNode := TV.GetNext(childNode)
+    }
+    return false
 }
 
 ; 刪除片段
@@ -447,29 +544,49 @@ UpdateSearchResults(searchGui, searchEdit, resultList) {
     searchInPhrase := searchGui["SearchPhrase"].Value
     searchInBoth := searchGui["SearchBoth"].Value
     
-    currentNode := TV.GetNext()
-    while currentNode {
-        groupName := TV.GetText(currentNode)
-        childNode := TV.GetChild(currentNode)
-        
+    ; 遞迴搜索函數
+    SearchNodeRecursive(node, groupPath := "") {
+        if !node
+            return
+            
+        currentGroupPath := groupPath
+        if (groupPath = "")
+            currentGroupPath := TV.GetText(node)
+        else
+            currentGroupPath := groupPath "\" TV.GetText(node)
+            
+        ; 處理當前節點的子項目
+        childNode := TV.GetChild(node)
         while childNode {
-            key := TV.GetText(childNode)
-            if textSnippets.Has(key) {
-                value := textSnippets[key]
-                
-                matched := false
-                if (searchInKey && InStr(key, searchText))
-                    matched := true
-                else if (searchInPhrase && InStr(value, searchText))
-                    matched := true
-                else if (searchInBoth && (InStr(key, searchText) || InStr(value, searchText)))
-                    matched := true
-                
-                if matched
-                    resultList.Add(, groupName, key, value)
+            if TV.GetChild(childNode) {
+                ; 如果是群組，遞迴搜索
+                SearchNodeRecursive(childNode, currentGroupPath)
+            } else {
+                ; 如果是項目，檢查是否符合搜索條件
+                key := TV.GetText(childNode)
+                if textSnippets.Has(key) {
+                    value := textSnippets[key]
+                    
+                    matched := false
+                    if (searchInKey && InStr(key, searchText))
+                        matched := true
+                    else if (searchInPhrase && InStr(value, searchText))
+                        matched := true
+                    else if (searchInBoth && (InStr(key, searchText) || InStr(value, searchText)))
+                        matched := true
+                    
+                    if matched
+                        resultList.Add(, currentGroupPath, key, value)
+                }
             }
             childNode := TV.GetNext(childNode)
         }
+    }
+    
+    ; 從頂層群組開始搜索
+    currentNode := TV.GetNext()
+    while currentNode {
+        SearchNodeRecursive(currentNode)
         currentNode := TV.GetNext(currentNode)
     }
 }
@@ -479,42 +596,80 @@ JumpToItem(resultList) {
     if !row
         return
         
-    groupName := resultList.GetText(row, 1)
+    groupPath := resultList.GetText(row, 1)
     key := resultList.GetText(row, 2)
     
+    ; 根據完整路徑找到並展開群組
+    pathParts := StrSplit(groupPath, "\")
     currentNode := TV.GetNext()
-    while currentNode {
-        if (TV.GetText(currentNode) = groupName) {
-            TV.Modify(currentNode, "Expand")
-            childNode := TV.GetChild(currentNode)
-            while childNode {
-                if (TV.GetText(childNode) = key) {
-                    TV.Modify(childNode, "Select")
+    
+    ; 遍歷路徑找到目標群組
+    targetNode := 0
+    for i, part in pathParts {
+        while currentNode {
+            if (TV.GetText(currentNode) = part) {
+                TV.Modify(currentNode, "Expand")
+                if (i = pathParts.Length) {
+                    targetNode := currentNode
                     break
                 }
-                childNode := TV.GetNext(childNode)
+                currentNode := TV.GetChild(currentNode)
+                break
             }
-            break
+            currentNode := TV.GetNext(currentNode)
         }
-        currentNode := TV.GetNext(currentNode)
     }
-
-    LV.Delete()
-    childNode := TV.GetChild(currentNode)
-    while childNode {
-        itemKey := TV.GetText(childNode)
-        if textSnippets.Has(itemKey)
-            LV.Add(, itemKey, textSnippets[itemKey])
-        childNode := TV.GetNext(childNode)
+    
+    ; 在目標群組中找到並選中項目
+    if (targetNode) {
+        childNode := TV.GetChild(targetNode)
+        while childNode {
+            if (TV.GetText(childNode) = key) {
+                TV.Modify(childNode, "Select")
+                break
+            }
+            childNode := TV.GetNext(childNode)
+        }
     }
-
+    
+    ; 更新 ListView 顯示
+    TVSelect()
+    
+    ; 在 ListView 中選中相應項目
     Loop LV.GetCount() {
-        if (LV.GetText(A_Index, 1) = key) {
+        if (LV.GetText(A_Index, 2) = key) {
             LV.Modify(A_Index, "Select Focus")
             break
         }
     }
 }
+
+; === 切換顯示模式的函數 === 
+SwitchDisplayMode(*) {
+    ; mainGui.GetPos(,, &Width)
+    ; GuiResize(mainGui, 1, Width, currentHeight)
+    mainGui.GetPos(,, &currentWidth, &currentHeight)  ; 獲取當前視窗的實際尺寸
+    currentHeight -= 40
+    ; 使用當前實際尺寸進行重繪
+    GuiResize(mainGui, 1, currentWidth, currentHeight)
+
+    listWidth := currentWidth - treeWidth - 20
+    controlHeight := currentHeight - 100  ; 使用保存的高度
+
+    if (viewRadio.Value) {
+        ; ListView 模式
+        previewEdit.Visible := false
+        LV.Move(treeWidth + 5, 5, listWidth - 15, controlHeight)
+    } else {
+        ; Preview 模式
+        previewEdit.Visible := true
+        listHeight := Floor(controlHeight / 3)
+        LV.Move(treeWidth + 5, 5, listWidth - 15, listHeight)
+        previewEdit.Move(treeWidth + 5, listHeight + 10, listWidth - 15, controlHeight - listHeight - 10)
+    }
+    WinRedraw(mainGui)  ; 添加這行來強制刷新 GUI
+}
+
 
 ; === 群組管理相關函數 ===
 AddNewGroup(*) {
@@ -646,51 +801,38 @@ DeleteGroupItems(node) {
 ; === 3. 熱字串相關函數 ===
 ;==========================================
 
-; 註冊熱字串
-RegisterHotstrings(key) {
-    if !textSnippets.Has(key)
-        return
-        
-    text := textSnippets[key]
-    
-    ; 先嘗試解除註冊（如果存在的話）
-    try {
-        try Hotstring(":*:" key " ",, "Off")
-        try Hotstring(":*:" key ".",, "Off")
-    }
-    
-    Sleep(50)  ; 給系統一點時間處理
-    
-    ; 註冊新的熱字串
-    try {
-        Hotstring(":*:" key " ", (*) => SendWithIMEControl(text))
-        Hotstring(":*:" key ".", (*) => SendWithIMEControl(text))
-    } catch as e {
-        TrayTip("Text Expander", "警告：註冊熱字串時發生錯誤")
-    }
-}
-
-; 解除註冊熱字串
-UnregisterHotstrings(key) {
-    if (key = "")
-        return
-        
-    try {
-        try Hotstring(":*:" key " ",, "Off")
-    }
-    try {
-        try Hotstring(":*:" key ".",, "Off")
-    }
-    Sleep(150)
-}
-
-; 創建熱字串
 CreateHotstring(key, value) {
     callback(*) => SendWithIMEControl(value)
+    Hotstring(":C*:" key " ", callback)  ; 只使用大小寫敏感選項
+    Hotstring(":C*:" key ".", callback)
+ }
+
+ RegisterHotstrings(key) {
+    if !textSnippets.Has(key)
+        return
+    text := textSnippets[key]
     
-    Hotstring(":*:" key " ", callback)
-    Hotstring(":*:" key ".", callback)
-}
+    try {
+        try Hotstring(":C*:" key " ",, "Off")
+        try Hotstring(":C*:" key ".",, "Off")
+    }
+    Sleep(50)
+    
+    try {
+        Hotstring(":C*:" key " ", (*) => SendWithIMEControl(text))
+        Hotstring(":C*:" key ".", (*) => SendWithIMEControl(text))
+    }
+ }
+ 
+ UnregisterHotstrings(key) {
+    if (key = "")
+        return
+    try {
+        try Hotstring(":C*:" key " ",, "Off")
+        try Hotstring(":C*:" key ".",, "Off")
+    }
+    Sleep(150)
+ }
 
 ; 開關熱字串
 ToggleHotstrings(*) {
@@ -721,6 +863,9 @@ SendWithIMEControl(text) {
     ; 處理所有動態標記
     for tag, value in replacements
         text := StrReplace(text, tag, value)
+    
+    ; 增加空格保留邏輯
+    text .= " "  ; 在輸出文字後添加空格
 
     if (pasteRadio.Value) {
         ; 使用剪貼板方式
@@ -759,31 +904,6 @@ SendWithIMEControl(text) {
     }
 }
 
-; 重新註冊所有熱字串
-ReloadAllHotstrings() {
-    ; 記錄現有的 key-value 對
-    savedPairs := Map()
-    for key, value in textSnippets {
-        savedPairs[key] := value
-    }
-
-    ; 清除所有熱字串
-    for key, value in textSnippets {
-        try {
-            Hotstring(":*:" key " ",, "Off")
-            Hotstring(":*:" key ".",, "Off")
-        }
-    }
-    Sleep(100)
-
-    ; 重新註冊
-    textSnippets.Clear()
-    for key, value in savedPairs {
-        textSnippets[key] := value
-        try CreateHotstring(key, value)
-    }
-}
-
 ; Ctrl+Alt+S 切換熱字串功能
 #HotIf
 ^!s:: {
@@ -809,49 +929,151 @@ ReloadAllHotstrings() {
 ;==========================================
 
 ; 保存片段到文件
+; 保存片段到文件
 SaveSnippets() {
     snippetFile := A_ScriptDir "\snippets.ini"
+    logFile := A_ScriptDir "\save_log.txt"
+    
     try {
+        ; 確保刪除舊的日誌文件
+        if FileExist(logFile)
+            FileDelete(logFile)
+            
+        FileAppend("=== 開始保存過程 " A_Now " ===`n", logFile)
+        FileAppend("正在處理檔案: " snippetFile "`n", logFile)
+        
         if FileExist(snippetFile)
             FileDelete(snippetFile)
             
         f := FileOpen(snippetFile, "w", "UTF-8")
+        if !f {
+            FileAppend("無法開啟檔案進行寫入！`n", logFile)
+            return
+        }
         
-        ; 保存頂層群組的直接項目
+        FileAppend("成功開啟檔案準備寫入`n", logFile)
+        
         currentNode := TV.GetNext()
         while currentNode {
             if !TV.GetParent(currentNode) {
                 nodeName := TV.GetText(currentNode)
+                FileAppend("處理頂層群組: " nodeName "`n", logFile)
+                
                 f.Write("[" nodeName "]`n")
                 
-                ; 寫入該群組直接的項目
-                childNode := TV.GetChild(currentNode)
-                while childNode {
-                    itemName := TV.GetText(childNode)
-                    if !TV.GetChild(childNode) && textSnippets.Has(itemName)
-                        f.Write(itemName "=" StrReplace(textSnippets[itemName], "`n", "<<NEWLINE>>") "`n")
-                    childNode := TV.GetNext(childNode)
-                }
+                ; 先處理直接項目
+                FileAppend("  處理頂層群組的直接項目:`n", logFile)
+                SaveDirectItems(f, currentNode, logFile)
                 
                 ; 處理子群組
-                childNode := TV.GetChild(currentNode)
-                while childNode {
-                    if TV.GetChild(childNode) {
-                        f.Write("`n")  ; 子群組前添加空行
-                        SaveGroupContent(f, childNode, nodeName)
-                    }
-                    childNode := TV.GetNext(childNode)
-                }
-                f.Write("`n")  ; 頂層群組後添加空行
+                FileAppend("  處理頂層群組的子群組:`n", logFile)
+                SaveNestedGroups(f, currentNode, nodeName, logFile)
+                
+                f.Write("`n")
             }
             currentNode := TV.GetNext(currentNode)
         }
         f.Close()
+        FileAppend("=== 保存完成 ===`n", logFile)
+        
+    } catch as err {
+        FileAppend("錯誤發生: " err.Message "`n", logFile)
+        MsgBox("保存時發生錯誤：" err.Message)
     }
 }
 
+; 保存直接項目
+SaveDirectItems(f, node, logFile) {
+    childNode := TV.GetChild(node)
+    while childNode {
+        itemName := TV.GetText(childNode)
+        if !TV.GetChild(childNode) {  ; 如果是一般項目
+            FileAppend("    檢查項目: " itemName "`n", logFile)
+            
+            if textSnippets.Has(itemName) {
+                value := textSnippets[itemName]
+                FileAppend("    寫入項目：" itemName " = " value "`n", logFile)
+                f.Write(itemName "=" StrReplace(value, "`n", "<<NEWLINE>>") "`n")
+            } else if InStr(itemName, "memo_") {
+                FileAppend("    發現memo項目但沒有對應的值: " itemName "`n", logFile)
+            }
+        }
+        childNode := TV.GetNext(childNode)
+    }
+}
+
+; 遞迴保存巢狀群組
+SaveNestedGroups(f, node, parentPath, logFile) {
+    childNode := TV.GetChild(node)
+    while childNode {
+        if TV.GetChild(childNode) {  ; 如果是群組
+            nodeName := TV.GetText(childNode)
+            currentPath := parentPath "\" nodeName
+            
+            FileAppend("    處理巢狀群組: " currentPath "`n", logFile)
+            f.Write("[" currentPath "]`n")
+            
+            ; 保存此群組的直接項目
+            FileAppend("      處理巢狀群組的直接項目:`n", logFile)
+            SaveDirectItems(f, childNode, logFile)
+            f.Write("`n")
+            
+            ; 遞迴處理更深層的群組
+            FileAppend("      處理更深層巢狀群組:`n", logFile)
+            SaveNestedGroups(f, childNode, currentPath, logFile)
+        }
+        childNode := TV.GetNext(childNode)
+    }
+}
+
+
 ; 載入片段從文件
 LoadSnippets() {
+    try {
+        snippetFile := A_ScriptDir "\snippets.ini"
+        if !FileExist(snippetFile)
+            return
+            
+        TV.Delete()
+        currentNode := 0
+        
+        Loop read snippetFile, "UTF-8" {
+            line := Trim(A_LoopReadLine)
+            if (line = "")
+                continue
+                
+            if RegExMatch(line, "^\[(.*)\]$", &match) {
+                groupPath := match[1]
+                if InStr(groupPath, "\") {
+                    groups := StrSplit(groupPath, "\")
+                    parentNode := FindOrCreateGroup(groups[1])
+                    currentNode := TV.Add(groups[2], parentNode)
+                } else {
+                    currentNode := TV.Add(groupPath)
+                }
+                continue
+            }
+            
+            parts := StrSplit(line, "=",, 2)
+            if (parts.Length >= 2) {
+                key := parts[1]
+                decodedValue := StrReplace(parts[2], "<<NEWLINE>>", "`n")
+                
+                textSnippets[key] := decodedValue
+                if currentNode
+                    TV.Add(key, currentNode)
+                    
+                LV.Add(, key, decodedValue)
+                
+                ; 註冊大小寫敏感的熱字串
+                if !InStr(key, "memo_")
+                    RegisterHotstrings(key)
+            }
+        }
+    }
+ }
+
+LoadSnippetsWithoutHotstring() {
     try {
         snippetFile := A_ScriptDir "\snippets.ini"
         if !FileExist(snippetFile)
@@ -900,6 +1122,7 @@ ExportSnippets(*) {
         
     try {
         f := FileOpen(savePath, "w", "UTF-8")
+        exportLog := A_ScriptDir "\export_log.txt"  ; 建立一個導出專用的日誌檔案
         
         currentNode := TV.GetNext()
         while currentNode {
@@ -907,22 +1130,12 @@ ExportSnippets(*) {
                 nodeName := TV.GetText(currentNode)
                 f.Write("[" nodeName "]`n")
                 
-                childNode := TV.GetChild(currentNode)
-                while childNode {
-                    itemName := TV.GetText(childNode)
-                    if !TV.GetChild(childNode) && textSnippets.Has(itemName)
-                        f.Write(itemName "=" StrReplace(textSnippets[itemName], "`n", "<<NEWLINE>>") "`n")
-                    childNode := TV.GetNext(childNode)
-                }
+                ; 先處理直接項目
+                SaveDirectItems(f, currentNode, exportLog)
                 
-                childNode := TV.GetChild(currentNode)
-                while childNode {
-                    if TV.GetChild(childNode) {
-                        f.Write("`n")
-                        SaveGroupContent(f, childNode, nodeName)  ; 使用 SaveGroupContent 替代 ExportGroupContent
-                    }
-                    childNode := TV.GetNext(childNode)
-                }
+                ; 處理子群組
+                SaveNestedGroups(f, currentNode, nodeName, exportLog)
+                
                 f.Write("`n")
             }
             currentNode := TV.GetNext(currentNode)
@@ -933,7 +1146,6 @@ ExportSnippets(*) {
         MsgBox("匯出失敗：" err.Message, "錯誤", "Icon!")
     }
 }
-
 
 ; 匯入片段
 ImportSnippets(*) {
@@ -1016,32 +1228,7 @@ ImportSnippets(*) {
 }
 
 
-; 保存群組內容
-SaveGroupContent(f, parentNode, parentPath) {
-    nodeName := TV.GetText(parentNode)
-    f.Write("[" parentPath "\" nodeName "]`n")
-    
-    ; 保存該群組的直接項目
-    childNode := TV.GetChild(parentNode)
-    while childNode {
-        itemName := TV.GetText(childNode)
-        if !TV.GetChild(childNode) && textSnippets.Has(itemName) {
-            f.Write(itemName "=" StrReplace(textSnippets[itemName], "`n", "<<NEWLINE>>") "`n")
-        }
-        childNode := TV.GetNext(childNode)
-    }
 
-    ; 處理巢狀群組
-    childNode := TV.GetChild(parentNode)
-    while childNode {
-        if TV.GetChild(childNode) {
-            f.Write("`n")  ; 在子群組前添加空行
-            SaveGroupContent(f, childNode, parentPath "\" nodeName)
-        }
-        childNode := TV.GetNext(childNode)
-    }
-    f.Write("`n")  ; 在群組結束後添加空行
-}
 
 
 ;==========================================
@@ -1060,7 +1247,12 @@ GetFullGroupPath(node) {
 }
 
 IsEmptyGroup(node) {
-    return !TV.GetChild(node) && !textSnippets.Has(TV.GetText(node))
+    nodeText := TV.GetText(node)
+    ; 如果是 memo_ 開頭的項目，就不該被當作空群組
+    if InStr(nodeText, "memo_") {
+        return false
+    }
+    return !TV.GetChild(node) && !textSnippets.Has(nodeText)
 }
 
 FindOrCreateGroup(groupName) {
@@ -1122,6 +1314,15 @@ ShowGroupContents(groupNode) {
 ShowSingleItem(itemNode) {
     displayText := TV.GetText(itemNode)
     
+    if InStr(displayText, "memo_") {
+        if textSnippets.Has(displayText) {
+            groupPath := GetFullGroupPath(TV.GetParent(itemNode))
+            modifiedDisplay := "<memo> " StrReplace(displayText, "memo_", "")
+            LV.Add(, groupPath, modifiedDisplay, textSnippets[displayText])
+        }
+        return
+     }
+    
     if IsEmptyGroup(itemNode)
         return
         
@@ -1131,14 +1332,8 @@ ShowSingleItem(itemNode) {
         
     groupPath := GetFullGroupPath(parentNode)
     
-    for key, value in textSnippets {
-        if (displayText = "(memo)" && InStr(key, "memo_")) {
-            LV.Add(, groupPath, displayText, value)
-            break
-        } else if (key = displayText) {
-            LV.Add(, groupPath, key, value)
-            break
-        }
+    if textSnippets.Has(displayText) {
+        LV.Add(, groupPath, displayText, textSnippets[displayText])  ; 正常顏色
     }
 }
 
@@ -1185,6 +1380,35 @@ ShowDynamicTags(*) {
     helpGui.Show()
 }
 
+; === 異步載入讓程式在載入檔案時不會凍結GUI ===
+LoadSnippetsAsync() {
+    progressGui := Gui("+Owner" mainGui.Hwnd)
+    progressGui.Add("Text",, "載入中...")
+    progressGui.Show("AutoSize")
+    
+    FileAppend("=== 開始異步載入 ===`n", A_ScriptDir "\load_debug.txt")
+    
+    TV.Opt("-Redraw")
+    LV.Opt("-Redraw")
+    
+    ; 只讀取檔案和更新 UI，不註冊熱字串
+    LoadSnippetsWithoutHotstring()  
+    
+    TV.Opt("+Redraw")
+    LV.Opt("+Redraw")
+    
+    ; 一次性註冊所有熱字串
+    FileAppend("=== 註冊熱字串 ===`n", A_ScriptDir "\load_debug.txt")
+    for key, value in textSnippets {
+        if !InStr(key, "memo_") {
+            CreateHotstring(key, value)
+            FileAppend("註冊: " key "`n", A_ScriptDir "\load_debug.txt")
+        }
+    }
+    
+    FileAppend("=== 載入完成 ===`n", A_ScriptDir "\load_debug.txt")
+    progressGui.Destroy()
+}
 ;==========================================
 ; === 6. 程式初始化 ===
 ;==========================================
@@ -1197,27 +1421,13 @@ rootFolder := TV.Add("Email Templates")
 thanksFolder := TV.Add("Thanks", rootFolder)
 TV.Add("Messages", rootFolder)
 
-; 載入已保存的片段
-LoadSnippets()
-
 ; 顯示主視窗
 mainGui.Show()
 
-; 清除並重新註冊所有熱字串
-for key, value in textSnippets {
-    try {
-        Hotstring(":*:" key " ",, "Off")
-        Hotstring(":*:" key ".",, "Off")
-    }
-}
-Sleep(100)
+; 異步載入片段
+SetTimer LoadSnippetsAsync, -1
 
-; 重新註冊所有熱字串
-for key, value in textSnippets {
-    handler := (originalValue := value) => (*) => SendWithIMEControl(originalValue)
-    try {
-        Hotstring(":*:" key " ", handler())
-        Hotstring(":*:" key ".", handler())
-    }
-}
-
+;==========================================
+; === 7. Sync ===
+;==========================================
+; 暫時放棄
