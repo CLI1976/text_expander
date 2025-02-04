@@ -19,6 +19,7 @@
 ; 路徑處理
 ; 群組管理
 ; 顯示處理
+; 日誌管理函數
 
 ; === 6. 程式初始化 ===
 ; 載入設定
@@ -133,9 +134,9 @@ exportButton := mainGui.Add("Button", "x345 y410", "Export")
 searchButton := mainGui.Add("Button", "x405 y410", "Search")
 
 ; 在原有的輸出方式選擇後面添加後綴選擇
-outputSuffixText := mainGui.Add("Text", "x15 y480", "輸出後綴：")
-spaceSuffixRadio := mainGui.Add("Radio", "x85 y480 Checked", "空白")
-triggerSuffixRadio := mainGui.Add("Radio", "x185 y480", "觸發")
+outputSuffixText := mainGui.Add("Text", "x315 y480", "輸出後綴：")
+spaceSuffixRadio := mainGui.Add("Radio", "x385 y480 Checked", "空白")
+triggerSuffixRadio := mainGui.Add("Radio", "x445 y480", "觸發")
 
 ; 設置事件處理
 mainGui.OnEvent("Size", GuiResize)
@@ -160,9 +161,8 @@ addGroupButton.OnEvent("Click", AddNewGroup)
 deleteGroupButton.OnEvent("Click", DeleteGroup)
 
 ; 在主程式初始化部分添加
-spaceSuffixRadio.OnEvent("Click", SaveUserSettings)
-triggerSuffixRadio.OnEvent("Click", SaveUserSettings)
-
+spaceSuffixRadio.OnEvent("Click", OnSuffixChange)
+triggerSuffixRadio.OnEvent("Click", OnSuffixChange)
 
 ; GUI 事件處理函數
 GuiResize(thisGui, MinMax, Width, Height) {
@@ -375,12 +375,13 @@ EditSnippet(*) {
     oldKeyword := LV.GetText(row, 2)
     oldPhrase := LV.GetText(row, 3)
     
-    ; Debug 記錄
-    FileAppend("=== 開始編輯 ===`n", A_ScriptDir "\edit_log.txt")
-    FileAppend("原始值：`n", A_ScriptDir "\edit_log.txt")
-    FileAppend("群組路徑: " oldGroupPath "`n", A_ScriptDir "\edit_log.txt")
-    FileAppend("關鍵字: " oldKeyword "`n", A_ScriptDir "\edit_log.txt")
-    FileAppend("短語: " oldPhrase "`n", A_ScriptDir "\edit_log.txt")
+    ; 編輯日誌
+    ManageLogFile(A_ScriptDir "\edit_log.txt", "=== 開始編輯 ===")
+    ManageLogFile(A_ScriptDir "\edit_log.txt", "原始值：")
+    ManageLogFile(A_ScriptDir "\edit_log.txt", "群組路徑: " oldGroupPath)
+    ManageLogFile(A_ScriptDir "\edit_log.txt", "關鍵字: " oldKeyword)
+    ManageLogFile(A_ScriptDir "\edit_log.txt", "短語: " oldPhrase)
+
     
     editGui := Gui("+Owner" . mainGui.Hwnd . " +Resize", "Edit Snippet")
     editGui.SetFont("s10", "Segoe UI")
@@ -963,13 +964,10 @@ SaveSnippets() {
     logFile := A_ScriptDir "\save_log.txt"
     
     try {
-        ; 確保刪除舊的日誌文件
-        if FileExist(logFile)
-            FileDelete(logFile)
-            
-        FileAppend("=== 開始保存過程 " A_Now " ===`n", logFile)
-        FileAppend("正在處理檔案: " snippetFile "`n", logFile)
         
+        ManageLogFile(logFile, "=== 開始保存過程 " A_Now " ===")
+        ManageLogFile(logFile, "正在處理檔案: " snippetFile)
+                        
         if FileExist(snippetFile)
             FileDelete(snippetFile)
             
@@ -986,7 +984,7 @@ SaveSnippets() {
             if !TV.GetParent(currentNode) {
                 nodeName := TV.GetText(currentNode)
                 FileAppend("處理頂層群組: " nodeName "`n", logFile)
-                
+                ManageLogFile(logFile, "處理頂層群組: " nodeName)
                 f.Write("[" nodeName "]`n")
                 
                 ; 先處理直接項目
@@ -1003,6 +1001,7 @@ SaveSnippets() {
         }
         f.Close()
         FileAppend("=== 保存完成 ===`n", logFile)
+
         
     } catch as err {
         FileAppend("錯誤發生: " err.Message "`n", logFile)
@@ -1151,6 +1150,7 @@ ExportSnippets(*) {
     try {
         f := FileOpen(savePath, "w", "UTF-8")
         exportLog := A_ScriptDir "\export_log.txt"  ; 建立一個導出專用的日誌檔案
+        ManageLogFile(A_ScriptDir "\export_log.txt", "=== 開始導出 " A_Now " ===")
         
         currentNode := TV.GetNext()
         while currentNode {
@@ -1410,11 +1410,11 @@ ShowDynamicTags(*) {
 
 ; === 異步載入讓程式在載入檔案時不會凍結GUI ===
 LoadSnippetsAsync() {
+    ManageLogFile(A_ScriptDir "\load_debug.txt", "=== 開始異步載入 ===")
     progressGui := Gui("+Owner" mainGui.Hwnd)
     progressGui.Add("Text",, "載入中...")
     progressGui.Show("AutoSize")
     
-    FileAppend("=== 開始異步載入 ===`n", A_ScriptDir "\load_debug.txt")
     
     TV.Opt("-Redraw")
     LV.Opt("-Redraw")
@@ -1430,13 +1430,49 @@ LoadSnippetsAsync() {
     for key, value in textSnippets {
         if !InStr(key, "memo_") {
             CreateHotstring(key, value)
-            FileAppend("註冊: " key "`n", A_ScriptDir "\load_debug.txt")
+            ManageLogFile(A_ScriptDir "\load_debug.txt", "註冊: " key)
         }
     }
-    
-    FileAppend("=== 載入完成 ===`n", A_ScriptDir "\load_debug.txt")
+    ManageLogFile(A_ScriptDir "\load_debug.txt", "=== 載入完成 ===")
     progressGui.Destroy()
 }
+
+; === 日誌管理函數 ===
+ManageLogFile(logFile, content, maxSize := 20480) {  ; 20KB = 20480 bytes
+    try {
+        ; 檢查文件是否存在及其大小
+        if FileExist(logFile) {
+            fileObj := FileOpen(logFile, "r")
+            if fileObj {
+                fileSize := fileObj.Length
+                fileObj.Close()
+                
+                ; 如果文件大小超過限制，刪除舊文件
+                if (fileSize > maxSize) {
+                    FileDelete(logFile)
+                }
+            }
+        }
+        
+        ; 添加新的日誌內容
+        FileAppend(content "`n", logFile)
+    } catch Error as err {
+        ; 如果發生錯誤，靜默處理或者可以記錄到系統事件日誌
+        ; OutputDebug("Log error: " err.Message)
+    }
+}
+
+; === 切換輸出後綴選項時重新註冊所有熱字串，確保立即生效 ===
+OnSuffixChange(*) {
+    SaveUserSettings()
+    ; 重新註冊所有熱字串
+    for key, value in textSnippets {
+        if !InStr(key, "memo_") {
+            CreateHotstring(key, value)
+        }
+    }
+}
+
 ;==========================================
 ; === 6. 程式初始化 ===
 ;==========================================
