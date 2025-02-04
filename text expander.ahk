@@ -42,12 +42,13 @@ global controlHeight := 0
 
 ; Settings functions
 LoadUserSettings() {
-    global settingsFile, sendRadio, pasteRadio
+    global settingsFile, sendRadio, pasteRadio, spaceSuffixRadio, triggerSuffixRadio
     
     ; 如果設定檔不存在，創建預設設定
     if !FileExist(settingsFile) {
         try {
             IniWrite("Ctrl+V", settingsFile, "OutputMethod", "DefaultMethod")
+            IniWrite("Space", settingsFile, "OutputSuffix", "DefaultSuffix")
         }
     }
     
@@ -59,15 +60,24 @@ LoadUserSettings() {
         } else {
             pasteRadio.Value := 1
         }
+
+        suffix := IniRead(settingsFile, "OutputSuffix", "DefaultSuffix", "Space")
+        if (suffix = "Space") {
+            spaceSuffixRadio.Value := 1
+        } else {
+            triggerSuffixRadio.Value := 1
+        }
     }
 }
 
 SaveUserSettings(*) {
-    global settingsFile, sendRadio
+    global settingsFile, sendRadio, spaceSuffixRadio
     
     try {
         method := sendRadio.Value ? "Send" : "Ctrl+V"
+        suffix := spaceSuffixRadio.Value ? "Space" : "Trigger"
         IniWrite(method, settingsFile, "OutputMethod", "DefaultMethod")
+        IniWrite(suffix, settingsFile, "OutputSuffix", "DefaultSuffix")
     }
 }
 
@@ -122,6 +132,11 @@ importButton := mainGui.Add("Button", "x285 y410", "Import")
 exportButton := mainGui.Add("Button", "x345 y410", "Export")
 searchButton := mainGui.Add("Button", "x405 y410", "Search")
 
+; 在原有的輸出方式選擇後面添加後綴選擇
+outputSuffixText := mainGui.Add("Text", "x15 y480", "輸出後綴：")
+spaceSuffixRadio := mainGui.Add("Radio", "x85 y480 Checked", "空白")
+triggerSuffixRadio := mainGui.Add("Radio", "x185 y480", "觸發")
+
 ; 設置事件處理
 mainGui.OnEvent("Size", GuiResize)
 LV.OnEvent("DoubleClick", EditSnippet)
@@ -143,6 +158,11 @@ previewRadio.OnEvent("Click", SwitchDisplayMode)
 
 addGroupButton.OnEvent("Click", AddNewGroup)
 deleteGroupButton.OnEvent("Click", DeleteGroup)
+
+; 在主程式初始化部分添加
+spaceSuffixRadio.OnEvent("Click", SaveUserSettings)
+triggerSuffixRadio.OnEvent("Click", SaveUserSettings)
+
 
 ; GUI 事件處理函數
 GuiResize(thisGui, MinMax, Width, Height) {
@@ -195,11 +215,16 @@ GuiResize(thisGui, MinMax, Width, Height) {
     radioY := buttonsY + 35
     outputMethodText.Move(15, radioY)
     sendRadio.Move(85, radioY)
-    pasteRadio.Move(185, radioY)
+    pasteRadio.Move(170, radioY)
     displayModeText.Move(305, radioY)
     viewRadio.Move(385, radioY)
-    previewRadio.Move(465, radioY)
+    previewRadio.Move(455, radioY)
 
+    ; 新增：更新輸出後綴選項位置
+    suffixY := radioY + 28  ; 在原有 radio 按鈕下方
+    outputSuffixText.Move(315, suffixY)
+    spaceSuffixRadio.Move(385, suffixY)
+    triggerSuffixRadio.Move(445, suffixY)
     
     ; 更新分組按鈕位置
     groupButtonsY := radioY + 20
@@ -363,7 +388,7 @@ EditSnippet(*) {
     editWidth -= 40
     keywordWidth := Min(editWidth - 20, 300)
     phraseWidth := editWidth - 20
-    phraseHeight := editHeight - 150
+    phraseHeight := editHeight - 170
     
     editGui.Add("Text",, "Group: " oldGroupPath)
     editGui.Add("Text",, "Keyword:")
@@ -379,7 +404,7 @@ EditSnippet(*) {
             return
             
         newWidth := Width - 40
-        newHeight := Height - 150
+        newHeight := Height - 170
         phraseEdit.Move(,, newWidth, newHeight)
         phraseEdit.GetPos(&phraseX, &phraseY)
         saveButton.Move(, phraseY + newHeight + 10)
@@ -802,9 +827,11 @@ DeleteGroupItems(node) {
 ;==========================================
 
 CreateHotstring(key, value) {
-    callback(*) => SendWithIMEControl(value)
-    Hotstring(":C*:" key " ", callback)  ; 只使用大小寫敏感選項
-    Hotstring(":C*:" key ".", callback)
+    callback(*) => SendWithIMEControl(value, " ")
+    callbackDot(*) => SendWithIMEControl(value, ".")
+    
+    Hotstring(":C*:" key " ", callback)
+    Hotstring(":C*:" key ".", callbackDot)
  }
 
  RegisterHotstrings(key) {
@@ -846,7 +873,7 @@ ToggleHotstrings(*) {
 }
 
 ; 文字輸出處理
-SendWithIMEControl(text) {
+SendWithIMEControl(text, trigger := " ") {
     ; 支援動態內容
     replacements := Map(
         "{TODAY}", FormatTime(, "yyyy/MM/dd"),
@@ -864,8 +891,9 @@ SendWithIMEControl(text) {
     for tag, value in replacements
         text := StrReplace(text, tag, value)
     
-    ; 增加空格保留邏輯
-    text .= " "  ; 在輸出文字後添加空格
+    ; 根據設定決定後綴
+    suffix := spaceSuffixRadio.Value ? " " : trigger
+    text .= suffix
 
     if (pasteRadio.Value) {
         ; 使用剪貼板方式
