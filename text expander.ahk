@@ -86,6 +86,14 @@ SaveUserSettings(*) {
 ; === 2. GUI 相關函數及初始化 ===
 ;==========================================
 
+; ========== 初始化系統托盤圖標和選單 ==========
+; 設置托盤圖標
+if FileExist(A_ScriptDir "\square-t.ico") {
+    TraySetIcon(A_ScriptDir "\square-t.ico")
+} else {
+    ; 使用默認圖標
+}
+
 ; 創建主視窗
 mainGui := Gui("+Resize +MinSize800x600", "Text Expander")
 mainGui.SetFont("s10", "Segoe UI")
@@ -827,15 +835,19 @@ DeleteGroupItems(node) {
 ; === 3. 熱字串相關函數 ===
 ;==========================================
 
+; 修改 CreateHotstring 函數
 CreateHotstring(key, value) {
     callback(*) => SendWithIMEControl(value, " ")
     callbackDot(*) => SendWithIMEControl(value, ".")
+    callbackComma(*) => SendWithIMEControl(value, ",")  ; 新增逗號觸發
     
     Hotstring(":C*:" key " ", callback)
     Hotstring(":C*:" key ".", callbackDot)
- }
+    Hotstring(":C*:" key ",", callbackComma)  ; 新增逗號觸發
+}
 
- RegisterHotstrings(key) {
+; 修改 RegisterHotstrings 函數
+RegisterHotstrings(key) {
     if !textSnippets.Has(key)
         return
     text := textSnippets[key]
@@ -843,24 +855,28 @@ CreateHotstring(key, value) {
     try {
         try Hotstring(":C*:" key " ",, "Off")
         try Hotstring(":C*:" key ".",, "Off")
+        try Hotstring(":C*:" key ",",, "Off")  ; 新增逗號
     }
     Sleep(50)
     
     try {
         Hotstring(":C*:" key " ", (*) => SendWithIMEControl(text))
         Hotstring(":C*:" key ".", (*) => SendWithIMEControl(text))
+        Hotstring(":C*:" key ",", (*) => SendWithIMEControl(text))  ; 新增逗號
     }
- }
- 
- UnregisterHotstrings(key) {
+}
+
+; 修改 UnregisterHotstrings 函數
+UnregisterHotstrings(key) {
     if (key = "")
         return
     try {
         try Hotstring(":C*:" key " ",, "Off")
         try Hotstring(":C*:" key ".",, "Off")
+        try Hotstring(":C*:" key ",",, "Off")  ; 新增逗號
     }
     Sleep(150)
- }
+}
 
 ; 開關熱字串
 ToggleHotstrings(*) {
