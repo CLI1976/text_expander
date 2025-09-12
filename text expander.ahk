@@ -908,6 +908,10 @@ SendWithIMEControl(text, trigger := " ") {
     for tag, value in replacements
         text := StrReplace(text, tag, value)
     
+    ; *** 在這裡加入換行符標準化 ***
+    text := StrReplace(text, "`n", "`r`n")
+    text := StrReplace(text, "`r`r`n", "`r`n")  ; 防止重複的 CR
+    
     ; 根據設定決定後綴
     suffix := spaceSuffixRadio.Value ? " " : trigger
     text .= suffix
