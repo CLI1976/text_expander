@@ -889,7 +889,7 @@ ToggleHotstrings(*) {
     TrayTip("Text Expander", A_IsSuspended ? "自動替換已禁用" : "自動替換已啟用")
 }
 
-; 文字輸出處理
+
 SendWithIMEControl(text, trigger := " ") {
     ; 支援動態內容
     replacements := Map(
@@ -908,48 +908,142 @@ SendWithIMEControl(text, trigger := " ") {
     for tag, value in replacements
         text := StrReplace(text, tag, value)
     
+
     ; *** 在這裡加入換行符標準化 ***
-    text := StrReplace(text, "`n", "`r`n")
-    text := StrReplace(text, "`r`r`n", "`r`n")  ; 防止重複的 CR
+    ; text := StrReplace(text, "`n", "`r`n")
+    ; text := StrReplace(text, "`r`r`n", "`r`n")  ; 防止重複的 CR
     
     ; 根據設定決定後綴
     suffix := spaceSuffixRadio.Value ? " " : trigger
     text .= suffix
 
     if (pasteRadio.Value) {
-        ; 使用剪貼板方式
-        backupClipboard := ClipboardAll()
+        ; 改進的剪貼板方式 - 增加重試機制
+            ; *** 在這裡加入換行符標準化 ***
+        text := StrReplace(text, "`n", "`r`n")
+        text := StrReplace(text, "`r`r`n", "`r`n")  ; 防止重複的 CR
+        SendTextViaClipboard(text)
+    } else {
+        ; 改進的 Send 方式
+        SendTextDirect(text)
+    }
+}
+
+; 新增：使用剪貼板的可靠版本
+SendTextViaClipboard(text) {
+    ; 獲取目標窗口
+    targetWindow := WinExist("A")
+    if !targetWindow {
+        SendTextDirect(text)
+        return
+    }
+    
+    ; 備份剪貼板內容
+    backupText := A_Clipboard
+    
+    try {
+        ; 設置剪貼板並發送
         A_Clipboard := text
         Sleep(50)
         
+        ; 確保窗口焦點
+        if (WinExist("A") != targetWindow) {
+            WinActivate(targetWindow)
+            Sleep(50)
+        }
+        
         Send("^v")
         
-        delay := 50 + (StrLen(text) * 6.5)
-        Sleep(delay)
+        ; 延遲恢復剪貼板
+        SetTimer(() => (A_Clipboard := backupText), -200)
         
-        A_Clipboard := backupClipboard
-    } else {
-        ; 使用一般Send方式
-        oldDelay := A_KeyDelay
-        oldMode := A_SendMode
-        
-        SetKeyDelay(0)
+    } catch as err {
+        ; 出錯時回退到直接發送
+        SendTextDirect(text)
+    }
+}
+
+; 新增：直接發送的可靠版本
+SendTextDirect(text) {
+    ; 如果文本包含換行+tab組合，切換到剪貼板模式
+    if InStr(text, "`n`t") {
+        SendTextViaClipboard(text)
+        return
+    }
+    
+    ; 保存當前設定
+    oldDelay := A_KeyDelay
+    oldMode := A_SendMode
+    
+    try {
+        ; 優化發送設定
+        SetKeyDelay(1, 1)  ; 稍微增加延遲避免字符丟失
         SendMode("Input")
         
-        prevIME := DllCall("GetKeyboardLayout", "UInt", DllCall("GetWindowThreadProcessId", "UInt", WinExist("A"), "UInt", 0))
+        ; 獲取當前 IME 狀態
+        targetWindow := WinExist("A")
+        if !targetWindow {
+            return
+        }
         
-        SendMessage(0x50, 0, 0x4090409,, "A")
+        ; 暫時切換到英文輸入模式
+        prevIME := DllCall("GetKeyboardLayout", "UInt", 
+                   DllCall("GetWindowThreadProcessId", "UInt", targetWindow, "UInt", 0))
+        
+        ; 強制切換到英文鍵盤
+        try {
+            SendMessage(0x50, 0, 0x4090409,, "A")
+            Sleep(50)  ; 等待 IME 切換完成
+        }
+        
+        ; 分段發送長文本，避免緩衝區問題
+        if (StrLen(text) > 100) {
+            SendTextInChunks(text)
+        } else {
+            Send("{Text}" . text)
+        }
+        
+        ; 等待發送完成
         Sleep(50)
         
-        Send(text)
-        
-        delay := 50 + (StrLen(text) * 5)
-        Sleep(delay)
-        
+    } catch as err {
+        ; 發生錯誤時的回退處理
+        try {
+            Send(text)
+        }
+    } finally {
+        ; 恢復原始設定
         SetKeyDelay(oldDelay)
         SendMode(oldMode)
         
-        PostMessage(0x50, 0, prevIME,, "A")
+        ; 延遲恢復 IME 狀態，避免干擾剛發送的文本
+        if (prevIME) {
+            SetTimer(() => PostMessage(0x50, 0, prevIME,, "A"), -150)
+        }
+    }
+}
+
+SendTextInChunks(text) {
+    chunkSize := 50
+    textLen := StrLen(text)
+    pos := 1
+    
+    while (pos <= textLen) {
+        chunk := SubStr(text, pos, chunkSize)
+        Send("{Text}" . chunk)
+        pos += chunkSize
+        
+        ; 每個區塊之間稍微暫停
+        if (pos <= textLen) {
+            Sleep(10)
+        }
+    }
+}
+
+; 新增：延遲恢復剪貼板的輔助函數
+RestoreClipboard(backupData) {
+    try {
+        A_Clipboard := backupData
     }
 }
 
