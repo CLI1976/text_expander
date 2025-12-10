@@ -34,6 +34,7 @@
 ; Global variables
 global textSnippets := Map()
 global hotstringEnabled := true
+global englishOnlyMode := false  ; 新增：僅英文輸入法生效模式
 global settingsFile := A_ScriptDir "\textEx_settings.ini"
 
 global treeWidth := 180
@@ -43,13 +44,14 @@ global controlHeight := 0
 
 ; Settings functions
 LoadUserSettings() {
-    global settingsFile, sendRadio, pasteRadio, spaceSuffixRadio, triggerSuffixRadio
+    global settingsFile, sendRadio, pasteRadio, spaceSuffixRadio, triggerSuffixRadio, englishOnlyCheckbox, englishOnlyMode
     
     ; 如果設定檔不存在，創建預設設定
     if !FileExist(settingsFile) {
         try {
             IniWrite("Ctrl+V", settingsFile, "OutputMethod", "DefaultMethod")
             IniWrite("Space", settingsFile, "OutputSuffix", "DefaultSuffix")
+            IniWrite("0", settingsFile, "IMEFilter", "EnglishOnly")
         }
     }
     
@@ -68,17 +70,25 @@ LoadUserSettings() {
         } else {
             triggerSuffixRadio.Value := 1
         }
+        
+        ; 讀取英文輸入法限制設定
+        englishOnly := IniRead(settingsFile, "IMEFilter", "EnglishOnly", "0")
+        englishOnlyMode := (englishOnly = "1")
+        englishOnlyCheckbox.Value := englishOnlyMode
     }
 }
 
 SaveUserSettings(*) {
-    global settingsFile, sendRadio, spaceSuffixRadio
+    global settingsFile, sendRadio, spaceSuffixRadio, englishOnlyCheckbox, englishOnlyMode
     
     try {
         method := sendRadio.Value ? "Send" : "Ctrl+V"
         suffix := spaceSuffixRadio.Value ? "Space" : "Trigger"
+        englishOnly := englishOnlyCheckbox.Value ? "1" : "0"
+        englishOnlyMode := englishOnlyCheckbox.Value
         IniWrite(method, settingsFile, "OutputMethod", "DefaultMethod")
         IniWrite(suffix, settingsFile, "OutputSuffix", "DefaultSuffix")
+        IniWrite(englishOnly, settingsFile, "IMEFilter", "EnglishOnly")
     }
 }
 
@@ -150,6 +160,9 @@ outputSuffixText := mainGui.Add("Text", "x315 y480", "輸出後綴：")
 spaceSuffixRadio := mainGui.Add("Radio", "x385 y480 Checked", "空白")
 triggerSuffixRadio := mainGui.Add("Radio", "x445 y480", "觸發")
 
+; 新增：僅英文輸入法生效選項
+englishOnlyCheckbox := mainGui.Add("Checkbox", "x515 y450", "僅英文輸入法")
+
 ; 設置事件處理
 mainGui.OnEvent("Size", GuiResize)
 LV.OnEvent("DoubleClick", EditSnippet)
@@ -175,6 +188,7 @@ deleteGroupButton.OnEvent("Click", DeleteGroup)
 ; 在主程式初始化部分添加
 spaceSuffixRadio.OnEvent("Click", OnSuffixChange)
 triggerSuffixRadio.OnEvent("Click", OnSuffixChange)
+englishOnlyCheckbox.OnEvent("Click", SaveUserSettings)
 
 ; GUI 事件處理函數
 GuiResize(thisGui, MinMax, Width, Height) {
@@ -231,6 +245,7 @@ GuiResize(thisGui, MinMax, Width, Height) {
     displayModeText.Move(305, radioY)
     viewRadio.Move(385, radioY)
     previewRadio.Move(455, radioY)
+    englishOnlyCheckbox.Move(555, radioY)  ; 新增
 
     ; 新增：更新輸出後綴選項位置
     suffixY := radioY + 28  ; 在原有 radio 按鈕下方
@@ -877,15 +892,60 @@ DeleteGroupItems(node) {
 ; === 3. 熱字串相關函數 ===
 ;==========================================
 
+; 檢查當前是否為英文輸入法
+IsEnglishIME() {
+    try {
+        targetWindow := WinExist("A")
+        if !targetWindow
+            return true  ; 無法判斷時預設允許
+        
+        ; 取得當前鍵盤佈局
+        threadId := DllCall("GetWindowThreadProcessId", "UInt", targetWindow, "UInt", 0)
+        keyboardLayout := DllCall("GetKeyboardLayout", "UInt", threadId)
+        
+        ; 取得語言 ID (低 16 位)
+        langId := keyboardLayout & 0xFFFF
+        
+        ; 0x0409 = 英文 (美式), 0x0809 = 英文 (英式)
+        return (langId = 0x0409 || langId = 0x0809)
+    } catch {
+        return true  ; 發生錯誤時預設允許
+    }
+}
+
+; 記錄上次的 IME 狀態
+global lastIMEState := true
+
+; 監控 IME 狀態，用 Suspend 控制整個腳本
+CheckIMEAndSuspend() {
+    global englishOnlyMode, lastIMEState
+    
+    ; 如果沒開啟「僅英文輸入法」模式，確保不是暫停狀態
+    if (!englishOnlyMode) {
+        if (A_IsSuspended)
+            Suspend(false)
+        return
+    }
+    
+    currentIME := IsEnglishIME()
+    
+    ; 只在狀態改變時才執行
+    if (currentIME != lastIMEState) {
+        lastIMEState := currentIME
+        
+        ; 中文輸入法 → Suspend, 英文輸入法 → 恢復
+        Suspend(!currentIME)
+    }
+}
+
+; 啟動 IME 監控定時器
+SetTimer(CheckIMEAndSuspend, 100)
+
 ; 修改 CreateHotstring 函數
 CreateHotstring(key, value) {
-    callback(*) => SendWithIMEControl(value, " ")
-    callbackDot(*) => SendWithIMEControl(value, ".")
-    callbackComma(*) => SendWithIMEControl(value, ",")  ; 新增逗號觸發
-    
-    Hotstring(":C*:" key " ", callback)
-    Hotstring(":C*:" key ".", callbackDot)
-    Hotstring(":C*:" key ",", callbackComma)  ; 新增逗號觸發
+    Hotstring(":C*:" key " ", (*) => SendWithIMEControl(value, " "))
+    Hotstring(":C*:" key ".", (*) => SendWithIMEControl(value, "."))
+    Hotstring(":C*:" key ",", (*) => SendWithIMEControl(value, ","))
 }
 
 ; 修改 RegisterHotstrings 函數
@@ -897,14 +957,14 @@ RegisterHotstrings(key) {
     try {
         try Hotstring(":C*:" key " ",, "Off")
         try Hotstring(":C*:" key ".",, "Off")
-        try Hotstring(":C*:" key ",",, "Off")  ; 新增逗號
+        try Hotstring(":C*:" key ",",, "Off")
     }
     Sleep(50)
     
     try {
-        Hotstring(":C*:" key " ", (*) => SendWithIMEControl(text))
-        Hotstring(":C*:" key ".", (*) => SendWithIMEControl(text))
-        Hotstring(":C*:" key ",", (*) => SendWithIMEControl(text))  ; 新增逗號
+        Hotstring(":C*:" key " ", (*) => SendWithIMEControl(text, " "))
+        Hotstring(":C*:" key ".", (*) => SendWithIMEControl(text, "."))
+        Hotstring(":C*:" key ",", (*) => SendWithIMEControl(text, ","))
     }
 }
 
@@ -915,7 +975,7 @@ UnregisterHotstrings(key) {
     try {
         try Hotstring(":C*:" key " ",, "Off")
         try Hotstring(":C*:" key ".",, "Off")
-        try Hotstring(":C*:" key ",",, "Off")  ; 新增逗號
+        try Hotstring(":C*:" key ",",, "Off")
     }
     Sleep(150)
 }
