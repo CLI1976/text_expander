@@ -97,12 +97,65 @@ SaveUserSettings(*) {
 ;==========================================
 
 ; ========== 初始化系統托盤圖標和選單 ==========
-; 設置托盤圖標
-if FileExist(A_ScriptDir "\square-t.ico") {
-    TraySetIcon(A_ScriptDir "\square-t.ico")
-} else {
-    ; 使用默認圖標
+;#########TRAYICON - Base64 Version;################
+;#########步驟 1：線上轉換 .ico 為 Base64;################
+;################
+;################
+Base64ToIcon(base64String, fileName) {
+    ; Base64 解碼
+    size := 0
+    DllCall("Crypt32\CryptStringToBinary"
+        , "Str", base64String
+        , "UInt", 0
+        , "UInt", 0x1  ; CRYPT_STRING_BASE64
+        , "Ptr", 0
+        , "UInt*", &size
+        , "Ptr", 0
+        , "Ptr", 0)
+    
+    buf := Buffer(size)
+    DllCall("Crypt32\CryptStringToBinary"
+        , "Str", base64String
+        , "UInt", 0
+        , "UInt", 0x1
+        , "Ptr", buf
+        , "UInt*", &size
+        , "Ptr", 0
+        , "Ptr", 0)
+    
+    iconPath := A_Temp "\" fileName
+    f := FileOpen(iconPath, "w")
+    f.RawWrite(buf, size)
+    f.Close()
+    
+    return iconPath
 }
+
+; 在這裡貼上你的 Base64 字串（可以分多行）
+Sys_iconBase64 := "
+(
+AAABAAEAICAAAAEAGACoDAAAFgAAACgAAAAgAAAAQAAAAAEAGAAAAAAAAAAAAGAAAABgAAAAAAAAAAAAAAD////////////29vaUlJQ9PT0ODg4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAODg49PT2UlJT29vb////////////////////KysoiIiIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhISHKysr////////////KysoMDAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDAzKysr////29vYhISEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhISH29vaUlJQAAAAAAAAAAAAAAABsbGzg4OD+/v7////////////////////////////////////////////////////////////////+/v7g4OBsbGwAAAAAAAAAAAAAAACUlJQ9PT0AAAAAAAAAAABsbGz///////////////////////////////////////////////////////////////////////////////////////9sbGwAAAAAAAAAAAA9PT0ODg4AAAAAAAAAAADg4OD////////////////////////////////////+/v7BwcHBwcH+/v7////////////////////////////////////g4OAAAAAAAAAAAAAODg4AAAAAAAAAAAAAAAD+/v7///////////////////////////////////9ra2sAAAAAAABra2v////////////////////////////////////+/v4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8HBwcAAAAAAAAHBwf///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAD///////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD////////////////k5ORsbGxVVVVVVVVVVVVVVVUAAAAAAAAAAAAAAABVVVVVVVVVVVVVVVVsbGzk5OT///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////82NjYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2Njb///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD///////////////8ICAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAICAj///////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+/v7///////////9ra2sAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABra2v////////////+/v4AAAAAAAAAAAAAAAAODg4AAAAAAAAAAADg4OD////////////+/v7BwcGqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqrBwcH+/v7////////////g4OAAAAAAAAAAAAAODg49PT0AAAAAAAAAAABsbGz///////////////////////////////////////////////////////////////////////////////////////9sbGwAAAAAAAAAAAA9PT2Tk5MAAAAAAAAAAAAAAABsbGzg4OD+/v7////////////////////////////////////////////////////////////////+/v7g4OBsbGwAAAAAAAAAAAAAAACUlJT29vYhISEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhISH29vb////KysoMDAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDAzKysr////////////KysohISEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAhISHKysr////////////////////29vaUlJQ9PT0ODg4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAODg49PT2Tk5P29vb///////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+)"
+Suspend_iconBase64 := "
+(
+AAABAAEAICAAAAEACACoCAAAFgAAACgAAAAgAAAAQAAAAAEACAAAAAAAAAAAAA4AAAAOAAAAAAEAAAAAAAAAAAAAAQEBAAICAgADAwMABAQEAAUFBQAGBgYABwcHAAgICAAJCQkACgoKAAsLCwAMDAwADQ0NAA4ODgAPDw8AEBAQABEREQASEhIAExMTABQUFAAVFRUAFhYWABcXFwAYGBgAGRkZABoaGgAbGxsAHBwcAB0dHQAeHh4AHx8fACAgIAAhISEAIiIiACMjIwAkJCQAJSUlACYmJgAnJycAKCgoACkpKQAqKioAKysrACwsLAAtLS0ALi4uAC8vLwAwMDAAMTExADIyMgAzMzMANDQ0ADU1NQA2NjYANzc3ADg4OAA5OTkAOjo6ADs7OwA8PDwAPT09AD4+PgA/Pz8AQEBAAEFBQQBCQkIAQ0NDAERERABFRUUARkZGAEdHRwBISEgASUlJAEpKSgBLS0sATExMAE1NTQBOTk4AT09PAFBQUABRUVEAUlJSAFNTUwBUVFQAVVVVAFZWVgBXV1cAWFhYAFlZWQBaWloAW1tbAFxcXABdXV0AXl5eAF9fXwBgYGAAYWFhAGJiYgBjY2MAZGRkAGVlZQBmZmYAZ2dnAGhoaABpaWkAampqAGtrawBsbGwAbW1tAG5ubgBvb28AcHBwAHFxcQBycnIAc3NzAHR0dAB1dXUAdnZ2AHd3dwB4eHgAeXl5AHp6egB7e3sAfHx8AH19fQB+fn4Af39/AICAgACBgYEAgoKCAIODgwCEhIQAhYWFAIaGhgCHh4cAiIiIAImJiQCKiooAi4uLAIyMjACNjY0Ajo6OAI+PjwCQkJAAkZGRAJKSkgCTk5MAlJSUAJWVlQCWlpYAl5eXAJiYmACZmZkAmpqaAJubmwCcnJwAnZ2dAJ6engCfn58AoKCgAKGhoQCioqIAo6OjAKSkpAClpaUApqamAKenpwCoqKgAqampAKqqqgCrq6sArKysAK2trQCurq4Ar6+vALCwsACxsbEAsrKyALOzswC0tLQAtbW1ALa2tgC3t7cAuLi4ALm5uQC6uroAu7u7ALy8vAC9vb0Avr6+AL+/vwDAwMAAwcHBAMLCwgDDw8MAxMTEAMXFxQDGxsYAx8fHAMjIyADJyckAysrKAMvLywDMzMwAzc3NAM7OzgDPz88A0NDQANHR0QDS0tIA09PTANTU1ADV1dUA1tbWANfX1wDY2NgA2dnZANra2gDb29sA3NzcAN3d3QDe3t4A39/fAODg4ADh4eEA4uLiAOPj4wDk5OQA5eXlAObm5gDn5+cA6OjoAOnp6QDq6uoA6+vrAOzs7ADt7e0A7u7uAO/v7wDw8PAA8fHxAPLy8gDz8/MA9PT0APX19QD29vYA9/f3APj4+AD5+fkA+vr6APv7+wD8/PwA/f39AP7+/gD///8A/////////////////////////////////////////////////////////xcPDw8PDw8PDw/h////////////////////////////BwAAAAAAAAAAAN////////////////////////////8HAAAAAAAAAAAA3////////////////////////////wcAAAAAAAAAAADf////////////////////////////BwAAAAAAAAAAAN/////////////////////////////49x4AAAAAHvf3/v//////////////////////////////HwAAAAAf//////////////////////////////////8fAAAAAB///////////////////////////////////x8AAAAAH///////////////////////////////////HwAAAAAf//////////////////////////////////8fAAAAAB///////////////////////////////////x8AAAAAH/////////////////9HR0dHR0dHR0dHR0dHCAAAAAAIR0dHR0dHR0dHR0dHRwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMfHx8fHx8fHx8fHx8cYAAAAABjHx8fHx8fHx8fHx8fH/////////////////x8AAAAAH///////////////////////////////////HwAAAAAf//////////////////////////////////8fAAAAAB//////////////////////57+/v7/P/////x8AAAAAH//////Pv7+/v+f///////+fAAAAAD//////HwAAAAAf/////z8AAAAAn////////58AAAAAP/////8fAAAAAB//////PwAAAACf////////nwAAAAA//////x8AAAAAH/////8/AAAAAJ////////+fAAAAAD339/f3HgAAAAAe9/f39z0AAAAAn////////58AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACf////////nwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ////////+fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAn////////58AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACf////////pQ8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PD6X//////////////////////////////////////////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+)"
+; 設定圖示
+
+OnMessage(0x111, (wparam, *) => (wparam=65305 || wparam=65404) ? SetTimer(set_suspended_icon, -1) : "")
+Suspend.DefineProp("Call", {Call: (this, NewState:=-1) => ((Func.Prototype.Call)(this, NewState), set_suspended_icon())})
+
+global SysIconPath := Base64ToIcon(Sys_iconBase64, "Sys_icon.ico")
+global SuspendIconPath := Base64ToIcon(Suspend_iconBase64, "Suspend_icon.ico")
+TraySetIcon(SysIconPath)
+
+set_suspended_icon(){
+    if A_IsSuspended
+        TraySetIcon(SuspendIconPath,, 1)
+    else
+        TraySetIcon(SysIconPath,, 1)
+}
+; ========== 初始化系統選單 ==========
 
 ; 創建主視窗
 mainGui := Gui("+Resize +MinSize800x600", "Text Expander")
