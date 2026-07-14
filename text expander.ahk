@@ -416,6 +416,8 @@ AddNewSnippet(*) {
                 keyword := "memo_" A_Now "_" Random(1000, 9999)
                 displayText := keyword
             } else {
+                if !ValidateKeyword(keyword)
+                    return
                 displayText := keyword
             }
             
@@ -425,7 +427,7 @@ AddNewSnippet(*) {
             LV.Add(, targetGroupPath, displayText, phrase)
             TV.Add(displayText, targetNode)
             
-            if !InStr(keyword, "memo_")
+            if !IsMemoKey(keyword)
                 RegisterHotstrings(keyword)
                 
             SaveSnippets()
@@ -458,9 +460,9 @@ EditSnippet(*) {
     ; 處理 memo 項目：如果顯示的是 "<memo> xxx"，要轉換回 "memo_xxx"
     isMemo := false
     displayKeyword := oldKeyword  ; 保存顯示用的文字
-    if InStr(oldKeyword, "<memo> ") {
+    if IsMemoDisplay(oldKeyword) {
         isMemo := true
-        oldKeyword := "memo_" SubStr(oldKeyword, 8)  ; 去掉 "<memo> " 前綴，加上 "memo_"
+        oldKeyword := MemoDisplayToKey(oldKeyword)
     }
     
     ; 編輯日誌
@@ -517,6 +519,10 @@ EditSnippet(*) {
 ; [已移除 log]         FileAppend("短語: " phrase "`n", A_ScriptDir "\edit_log.txt")
     
         if (keyword != "" && phrase != "") {
+            ; 關鍵字有變更時才驗證，沒改名（含 memo 項目）直接放行
+            if (oldKeyword != keyword && !ValidateKeyword(keyword))
+                return
+
             ; 1. 在 textSnippets 中進行更新
             textSnippets[keyword] := phrase
 ; [已移除 log]             FileAppend("新關鍵字/短語已加入 Map`n", A_ScriptDir "\edit_log.txt")
@@ -524,7 +530,7 @@ EditSnippet(*) {
             if (oldKeyword != keyword) {
                 textSnippets.Delete(oldKeyword)
                 ; 解除舊關鍵字的熱字串，避免舊觸發字繼續輸出舊內容
-                if !InStr(oldKeyword, "memo_")
+                if !IsMemoKey(oldKeyword)
                     UnregisterHotstrings(oldKeyword)
             }
             
@@ -548,14 +554,14 @@ EditSnippet(*) {
             ; 3. 更新 ListView
             ; 如果是 memo 項目，顯示時要加上 <memo> 前綴
             displayKeywordForLV := keyword
-            if InStr(keyword, "memo_") {
-                displayKeywordForLV := "<memo> " StrReplace(keyword, "memo_", "")
+            if IsMemoKey(keyword) {
+                displayKeywordForLV := MemoKeyToDisplay(keyword)
             }
             LV.Modify(row,, oldGroupPath, displayKeywordForLV, phrase)
 ; [已移除 log]             FileAppend("ListView 已更新 (顯示: " displayKeywordForLV ")`n", A_ScriptDir "\edit_log.txt")
             
             ; 4. 如果不是 memo_ 項目，更新熱字串
-            if !InStr(keyword, "memo_") {
+            if !IsMemoKey(keyword) {
                 CreateHotstring(keyword, phrase)
 ; [已移除 log]                 FileAppend("熱字串已更新`n", A_ScriptDir "\edit_log.txt")
             }
@@ -612,8 +618,8 @@ DeleteSnippet(*) {
     
     ; 處理 memo 項目：轉換顯示名稱為實際的 key
     actualKeyword := keyword
-    if InStr(keyword, "<memo> ") {
-        actualKeyword := "memo_" SubStr(keyword, 8)  ; 轉換 "<memo> xxx" 為 "memo_xxx"
+    if IsMemoDisplay(keyword) {
+        actualKeyword := MemoDisplayToKey(keyword)
     }
     
     if (MsgBox("確定要刪除這個項目嗎？", "確認刪除", "YesNo") = "Yes") {
@@ -769,8 +775,8 @@ JumpToItem(resultList) {
     ; 在 ListView 中選中相應項目
     ; 處理 memo 項目：需要轉換為顯示格式進行比對
     displayKey := key
-    if InStr(key, "memo_") {
-        displayKey := "<memo> " StrReplace(key, "memo_", "")
+    if IsMemoKey(key) {
+        displayKey := MemoKeyToDisplay(key)
     }
     
     Loop LV.GetCount() {
@@ -1089,36 +1095,51 @@ SendWithIMEControl(text, trigger := " ") {
 }
 
 ; 新增：使用剪貼板的可靠版本
+global clipBackup := ""  ; 展開前的剪貼簿完整備份（ClipboardAll 物件）
+
 SendTextViaClipboard(text) {
+    global clipBackup
     ; 獲取目標窗口
     targetWindow := WinExist("A")
     if !targetWindow {
         SendTextDirect(text)
         return
     }
-    
-    ; 備份剪貼板內容
-    backupText := A_Clipboard
-    
+
+    ; 取消尚未執行的還原，避免連續觸發時舊備份蓋掉新輸出
+    SetTimer(RestoreClipboardTimer, 0)
+
+    ; 備份剪貼簿完整內容（含圖片與格式）；已有未還原的備份時保留原備份
+    if !IsObject(clipBackup)
+        clipBackup := ClipboardAll()
+
     try {
         ; 設置剪貼板並發送
         A_Clipboard := text
         Sleep(50)
-        
+
         ; 確保窗口焦點
         if (WinExist("A") != targetWindow) {
             WinActivate(targetWindow)
             Sleep(50)
         }
-        
+
         Send("^v")
-        
+
         ; 延遲恢復剪貼板
-        SetTimer(() => (A_Clipboard := backupText), -200)
-        
+        SetTimer(RestoreClipboardTimer, -200)
+
     } catch as err {
         ; 出錯時回退到直接發送
         SendTextDirect(text)
+    }
+}
+
+RestoreClipboardTimer() {
+    global clipBackup
+    if IsObject(clipBackup) {
+        try A_Clipboard := clipBackup
+        clipBackup := ""
     }
 }
 
@@ -1133,7 +1154,8 @@ SendTextDirect(text) {
     ; 保存當前設定
     oldDelay := A_KeyDelay
     oldMode := A_SendMode
-    
+    prevIME := 0  ; 先初始化，finally 區塊才不會讀到未定義變數
+
     try {
         ; 優化發送設定
         SetKeyDelay(1, 1)  ; 稍微增加延遲避免字符丟失
@@ -1196,13 +1218,6 @@ SendTextInChunks(text) {
         if (pos <= textLen) {
             Sleep(10)
         }
-    }
-}
-
-; 新增：延遲恢復剪貼板的輔助函數
-RestoreClipboard(backupData) {
-    try {
-        A_Clipboard := backupData
     }
 }
 
@@ -1325,7 +1340,7 @@ LoadSnippets() {
                 }
 
                 ; 註冊大小寫敏感的熱字串
-                if !InStr(key, "memo_")
+                if !IsMemoKey(key)
                     RegisterHotstrings(key)
             }
         }
@@ -1458,7 +1473,7 @@ ImportSnippets(*) {
                     LV.Add(, groupPath, key, decodedValue)
                 }
                 
-                if !InStr(key, "memo_")
+                if !IsMemoKey(key)
                     RegisterHotstrings(key)
             }
         }
@@ -1493,10 +1508,51 @@ GetFullGroupPath(node) {
 IsEmptyGroup(node) {
     nodeText := TV.GetText(node)
     ; 如果是 memo_ 開頭的項目，就不該被當作空群組
-    if InStr(nodeText, "memo_") {
+    if IsMemoKey(nodeText) {
         return false
     }
     return !TV.GetChild(node) && !textSnippets.Has(nodeText)
+}
+
+; === memo 項目判斷與顯示名稱轉換 ===
+; 只比對前綴，避免關鍵字中間剛好含有 "memo_" 被誤判
+IsMemoKey(key) {
+    return SubStr(key, 1, 5) = "memo_"
+}
+
+IsMemoDisplay(text) {
+    return SubStr(text, 1, 7) = "<memo> "
+}
+
+; "memo_xxx" -> "<memo> xxx"
+MemoKeyToDisplay(key) {
+    return "<memo> " SubStr(key, 6)
+}
+
+; "<memo> xxx" -> "memo_xxx"
+MemoDisplayToKey(text) {
+    return "memo_" SubStr(text, 8)
+}
+
+; === 關鍵字驗證：重複、保留前綴、會破壞存檔格式的字元 ===
+ValidateKeyword(keyword) {
+    if textSnippets.Has(keyword) {
+        MsgBox("關鍵字「" keyword "」已存在，請使用其他名稱。", "重複的關鍵字", "Icon!")
+        return false
+    }
+    if InStr(keyword, "=") {
+        MsgBox("關鍵字不能包含「=」，會破壞存檔格式。", "無效的關鍵字", "Icon!")
+        return false
+    }
+    if (SubStr(keyword, 1, 1) = "[") {
+        MsgBox("關鍵字不能以「[」開頭，會被誤認為群組名稱。", "無效的關鍵字", "Icon!")
+        return false
+    }
+    if IsMemoKey(keyword) {
+        MsgBox("「memo_」是保留前綴（供無關鍵字的備忘項目使用），請使用其他名稱。", "無效的關鍵字", "Icon!")
+        return false
+    }
+    return true
 }
 
 FindOrCreateGroup(groupName) {
@@ -1604,10 +1660,10 @@ ShowGroupContents(groupNode) {
 ShowSingleItem(itemNode) {
     displayText := TV.GetText(itemNode)
     
-    if InStr(displayText, "memo_") {
+    if IsMemoKey(displayText) {
         if textSnippets.Has(displayText) {
             groupPath := GetFullGroupPath(TV.GetParent(itemNode))
-            modifiedDisplay := "<memo> " StrReplace(displayText, "memo_", "")
+            modifiedDisplay := MemoKeyToDisplay(displayText)
             LV.Add(, groupPath, modifiedDisplay, textSnippets[displayText])
         }
         return
@@ -1690,7 +1746,7 @@ LoadSnippetsAsync() {
     ; 一次性註冊所有熱字串
 ; [已移除 log]     FileAppend("=== 註冊熱字串 ===`n", A_ScriptDir "\load_debug.txt")
     for key, value in textSnippets {
-        if !InStr(key, "memo_") {
+        if !IsMemoKey(key) {
             CreateHotstring(key, value)
 ; [已移除 log]             ManageLogFile(A_ScriptDir "\load_debug.txt", "註冊: " key)
         }
@@ -1729,7 +1785,7 @@ OnSuffixChange(*) {
     SaveUserSettings()
     ; 重新註冊所有熱字串
     for key, value in textSnippets {
-        if !InStr(key, "memo_") {
+        if !IsMemoKey(key) {
             CreateHotstring(key, value)
         }
     }
