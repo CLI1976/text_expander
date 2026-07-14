@@ -33,7 +33,7 @@
 #include <LV_Colors>
 ; Global variables
 global textSnippets := Map()
-global hotstringEnabled := true
+global manualSuspend := false  ; 使用者手動關閉熱字串（ON/OFF 按鈕、Ctrl+Alt+S），優先於 IME 自動監控
 global englishOnlyMode := false  ; 新增：僅英文輸入法生效模式
 global settingsFile := A_ScriptDir "\textEx_settings.ini"
 
@@ -523,7 +523,9 @@ EditSnippet(*) {
             
             if (oldKeyword != keyword) {
                 textSnippets.Delete(oldKeyword)
-; [已移除 log]                 FileAppend("舊關鍵字已從 Map 中刪除`n", A_ScriptDir "\edit_log.txt")
+                ; 解除舊關鍵字的熱字串，避免舊觸發字繼續輸出舊內容
+                if !InStr(oldKeyword, "memo_")
+                    UnregisterHotstrings(oldKeyword)
             }
             
             ; 2. 更新 TreeView
@@ -615,19 +617,10 @@ DeleteSnippet(*) {
     }
     
     if (MsgBox("確定要刪除這個項目嗎？", "確認刪除", "YesNo") = "Yes") {
-        ; 在 TreeView 中搜尋時使用實際的 key
-        currentNode := TV.GetNext(0)
-        while currentNode {
-            childNode := TV.GetChild(currentNode)
-            while childNode {
-                if (TV.GetText(childNode) = actualKeyword) {
-                    TV.Delete(childNode)
-                    break
-                }
-                childNode := TV.GetNext(childNode)
-            }
-            currentNode := TV.GetNext(currentNode)
-        }
+        ; 在 TreeView 中搜尋時使用實際的 key（支援任意深度的巢狀群組）
+        targetNode := FindSnippetNode(actualKeyword)
+        if targetNode
+            TV.Delete(targetNode)
 
         UnregisterHotstrings(actualKeyword)
         textSnippets.Delete(actualKeyword)
@@ -971,8 +964,12 @@ global lastIMEState := true
 
 ; 監控 IME 狀態，用 Suspend 控制整個腳本
 CheckIMEAndSuspend() {
-    global englishOnlyMode, lastIMEState
-    
+    global englishOnlyMode, lastIMEState, manualSuspend
+
+    ; 使用者手動關閉時，IME 監控不得覆蓋手動狀態
+    if (manualSuspend)
+        return
+
     ; 如果沒開啟「僅英文輸入法」模式，確保不是暫停狀態
     if (!englishOnlyMode) {
         if (A_IsSuspended)
@@ -1012,8 +1009,7 @@ RegisterHotstrings(key) {
         try Hotstring(":C*:" key ".",, "Off")
         try Hotstring(":C*:" key ",",, "Off")
     }
-    Sleep(50)
-    
+
     try {
         Hotstring(":C*:" key " ", (*) => SendWithIMEControl(text, " "))
         Hotstring(":C*:" key ".", (*) => SendWithIMEControl(text, "."))
@@ -1030,18 +1026,26 @@ UnregisterHotstrings(key) {
         try Hotstring(":C*:" key ".",, "Off")
         try Hotstring(":C*:" key ",",, "Off")
     }
-    Sleep(150)
 }
 
-; 開關熱字串
+; 開關熱字串（手動開關優先於 IME 自動監控）
 ToggleHotstrings(*) {
-    Suspend  ; 切換暫停狀態
-    
+    global manualSuspend, englishOnlyMode, lastIMEState
+    manualSuspend := !manualSuspend
+
+    if (manualSuspend) {
+        Suspend(true)
+    } else {
+        ; 重新開啟後，交還給 IME 狀態決定是否暫停
+        lastIMEState := englishOnlyMode ? IsEnglishIME() : true
+        Suspend(!lastIMEState)
+    }
+
     ; 更新按鈕文字和顏色
-    toggleButton.Text := A_IsSuspended ? "OFF" : "ON"
-    toggleButton.Opt(A_IsSuspended ? "+cRed" : "+cGreen")
-    
-    TrayTip("Text Expander", A_IsSuspended ? "自動替換已禁用" : "自動替換已啟用")
+    toggleButton.Text := manualSuspend ? "OFF" : "ON"
+    toggleButton.Opt(manualSuspend ? "+cRed" : "+cGreen")
+
+    TrayTip("Text Expander", manualSuspend ? "自動替換已禁用" : "自動替換已啟用")
 }
 
 
@@ -1202,25 +1206,12 @@ RestoreClipboard(backupData) {
     }
 }
 
-; Ctrl+Alt+S 切換熱字串功能
+; Ctrl+Alt+S 切換熱字串功能（與 ON/OFF 按鈕同一套機制）
+; #SuspendExempt 讓此熱鍵在暫停狀態下仍可用來恢復
 #HotIf
-^!s:: {
-    global hotstringEnabled
-    hotstringEnabled := !hotstringEnabled
-    
-    for key, value in textSnippets {
-        if hotstringEnabled {
-            RegisterHotstrings(key)
-        } else {
-            UnregisterHotstrings(key)
-        }
-    }
-    
-    if hotstringEnabled
-        TrayTip("Text Expander", "自動替換已啟用")
-    else
-        TrayTip("Text Expander", "自動替換已禁用")
-}
+#SuspendExempt
+^!s:: ToggleHotstrings()
+#SuspendExempt false
 
 ;==========================================
 ; === 4. 文件操作相關函數 ===
@@ -1230,68 +1221,50 @@ RestoreClipboard(backupData) {
 ; 保存片段到文件
 SaveSnippets() {
     snippetFile := A_ScriptDir "\snippets.ini"
-    logFile := A_ScriptDir "\save_log.txt"
-    
+    tmpFile := snippetFile ".tmp"
+
     try {
-        
-        ManageLogFile(logFile, "=== 開始保存過程 " A_Now " ===")
-        ManageLogFile(logFile, "正在處理檔案: " snippetFile)
-                        
-        if FileExist(snippetFile)
-            FileDelete(snippetFile)
-            
-        f := FileOpen(snippetFile, "w", "UTF-8")
+        f := FileOpen(tmpFile, "w", "UTF-8")
         if !f {
-            FileAppend("無法開啟檔案進行寫入！`n", logFile)
+            MsgBox("無法開啟檔案進行寫入：" tmpFile, "錯誤", "Icon!")
             return
         }
-        
-        FileAppend("成功開啟檔案準備寫入`n", logFile)
-        
+
         currentNode := TV.GetNext()
         while currentNode {
             if !TV.GetParent(currentNode) {
                 nodeName := TV.GetText(currentNode)
-                FileAppend("處理頂層群組: " nodeName "`n", logFile)
-                ManageLogFile(logFile, "處理頂層群組: " nodeName)
                 f.Write("[" nodeName "]`n")
-                
+
                 ; 先處理直接項目
-                FileAppend("  處理頂層群組的直接項目:`n", logFile)
-                SaveDirectItems(f, currentNode, logFile)
-                
+                SaveDirectItems(f, currentNode)
+
                 ; 處理子群組
-                FileAppend("  處理頂層群組的子群組:`n", logFile)
-                SaveNestedGroups(f, currentNode, nodeName, logFile)
-                
+                SaveNestedGroups(f, currentNode, nodeName)
+
                 f.Write("`n")
             }
             currentNode := TV.GetNext(currentNode)
         }
         f.Close()
-        FileAppend("=== 保存完成 ===`n", logFile)
 
-        
+        ; 全部寫入成功後才覆蓋原檔，中途出錯不會弄丟原有資料
+        FileMove(tmpFile, snippetFile, 1)
+
     } catch as err {
-        FileAppend("錯誤發生: " err.Message "`n", logFile)
         MsgBox("保存時發生錯誤：" err.Message)
     }
 }
 
 ; 保存直接項目
-SaveDirectItems(f, node, logFile) {
+SaveDirectItems(f, node) {
     childNode := TV.GetChild(node)
     while childNode {
         itemName := TV.GetText(childNode)
         if !TV.GetChild(childNode) {  ; 如果是一般項目
-            FileAppend("    檢查項目: " itemName "`n", logFile)
-            
             if textSnippets.Has(itemName) {
                 value := textSnippets[itemName]
-                FileAppend("    寫入項目：" itemName " = " value "`n", logFile)
                 f.Write(itemName "=" StrReplace(value, "`n", "<<NEWLINE>>") "`n")
-            } else if InStr(itemName, "memo_") {
-                FileAppend("    發現memo項目但沒有對應的值: " itemName "`n", logFile)
             }
         }
         childNode := TV.GetNext(childNode)
@@ -1299,24 +1272,21 @@ SaveDirectItems(f, node, logFile) {
 }
 
 ; 遞迴保存巢狀群組
-SaveNestedGroups(f, node, parentPath, logFile) {
+SaveNestedGroups(f, node, parentPath) {
     childNode := TV.GetChild(node)
     while childNode {
         if TV.GetChild(childNode) {  ; 如果是群組
             nodeName := TV.GetText(childNode)
             currentPath := parentPath "\" nodeName
-            
-            FileAppend("    處理巢狀群組: " currentPath "`n", logFile)
+
             f.Write("[" currentPath "]`n")
-            
+
             ; 保存此群組的直接項目
-            FileAppend("      處理巢狀群組的直接項目:`n", logFile)
-            SaveDirectItems(f, childNode, logFile)
+            SaveDirectItems(f, childNode)
             f.Write("`n")
-            
+
             ; 遞迴處理更深層的群組
-            FileAppend("      處理更深層巢狀群組:`n", logFile)
-            SaveNestedGroups(f, childNode, currentPath, logFile)
+            SaveNestedGroups(f, childNode, currentPath)
         }
         childNode := TV.GetNext(childNode)
     }
@@ -1339,14 +1309,7 @@ LoadSnippets() {
                 continue
                 
             if RegExMatch(line, "^\[(.*)\]$", &match) {
-                groupPath := match[1]
-                if InStr(groupPath, "\") {
-                    groups := StrSplit(groupPath, "\")
-                    parentNode := FindOrCreateGroup(groups[1])
-                    currentNode := TV.Add(groups[2], parentNode)
-                } else {
-                    currentNode := TV.Add(groupPath)
-                }
+                currentNode := ResolveGroupPath(match[1])
                 continue
             }
             
@@ -1356,11 +1319,11 @@ LoadSnippets() {
                 decodedValue := StrReplace(parts[2], "<<NEWLINE>>", "`n")
                 
                 textSnippets[key] := decodedValue
-                if currentNode
+                if currentNode {
                     TV.Add(key, currentNode)
-                    
-                LV.Add(, key, decodedValue)
-                
+                    LV.Add(, GetFullGroupPath(currentNode), key, decodedValue)
+                }
+
                 ; 註冊大小寫敏感的熱字串
                 if !InStr(key, "memo_")
                     RegisterHotstrings(key)
@@ -1384,14 +1347,7 @@ LoadSnippetsWithoutHotstring() {
                 continue
                 
             if RegExMatch(line, "^\[(.*)\]$", &match) {
-                groupPath := match[1]
-                if InStr(groupPath, "\") {
-                    groups := StrSplit(groupPath, "\")
-                    parentNode := FindOrCreateGroup(groups[1])
-                    currentNode := TV.Add(groups[2], parentNode)
-                } else {
-                    currentNode := TV.Add(groupPath)
-                }
+                currentNode := ResolveGroupPath(match[1])
                 continue
             }
             
@@ -1401,10 +1357,10 @@ LoadSnippetsWithoutHotstring() {
                 decodedValue := StrReplace(parts[2], "<<NEWLINE>>", "`n")
                 
                 textSnippets[key] := decodedValue
-                if currentNode
+                if currentNode {
                     TV.Add(key, currentNode)
-                    
-                LV.Add(, key, decodedValue)
+                    LV.Add(, GetFullGroupPath(currentNode), key, decodedValue)
+                }
             }
         }
     }
@@ -1418,9 +1374,7 @@ ExportSnippets(*) {
         
     try {
         f := FileOpen(savePath, "w", "UTF-8")
-        exportLog := A_ScriptDir "\export_log.txt"  ; 建立一個導出專用的日誌檔案
-; [已移除 log]         ManageLogFile(A_ScriptDir "\export_log.txt", "=== 開始導出 " A_Now " ===")
-        
+
         currentNode := TV.GetNext()
         while currentNode {
             if !TV.GetParent(currentNode) {
@@ -1428,10 +1382,10 @@ ExportSnippets(*) {
                 f.Write("[" nodeName "]`n")
                 
                 ; 先處理直接項目
-                SaveDirectItems(f, currentNode, exportLog)
-                
+                SaveDirectItems(f, currentNode)
+
                 ; 處理子群組
-                SaveNestedGroups(f, currentNode, nodeName, exportLog)
+                SaveNestedGroups(f, currentNode, nodeName)
                 
                 f.Write("`n")
             }
@@ -1485,14 +1439,7 @@ ImportSnippets(*) {
                 continue
                 
             if RegExMatch(line, "^\[(.*)\]$", &match) {
-                groupPath := match[1]
-                if InStr(groupPath, "\") {
-                    groups := StrSplit(groupPath, "\")
-                    parentNode := FindOrCreateGroup(groups[1])
-                    currentNode := TV.Add(groups[2], parentNode)
-                } else {
-                    currentNode := FindOrCreateGroup(groupPath)
-                }
+                currentNode := ResolveGroupPath(match[1])
                 continue
             }
             
@@ -1560,6 +1507,52 @@ FindOrCreateGroup(groupName) {
         currentNode := TV.GetNext(currentNode)
     }
     return TV.Add(groupName)
+}
+
+; 依完整群組路徑（如 A\B\C）找到或建立對應節點，支援任意深度
+ResolveGroupPath(groupPath) {
+    groups := StrSplit(groupPath, "\")
+    node := FindOrCreateGroup(groups[1])
+    Loop groups.Length - 1
+        node := FindOrCreateChildGroup(node, groups[A_Index + 1])
+    return node
+}
+
+FindOrCreateChildGroup(parentNode, groupName) {
+    childNode := TV.GetChild(parentNode)
+    while childNode {
+        if (TV.GetText(childNode) = groupName)
+            return childNode
+        childNode := TV.GetNext(childNode)
+    }
+    return TV.Add(groupName, parentNode)
+}
+
+; 在整個 TreeView 中遞迴尋找指定文字的節點（任意深度）
+FindSnippetNode(text) {
+    currentNode := TV.GetNext()
+    while currentNode {
+        if (TV.GetText(currentNode) = text)
+            return currentNode
+        found := FindSnippetNodeIn(currentNode, text)
+        if found
+            return found
+        currentNode := TV.GetNext(currentNode)
+    }
+    return 0
+}
+
+FindSnippetNodeIn(parentNode, text) {
+    childNode := TV.GetChild(parentNode)
+    while childNode {
+        if (TV.GetText(childNode) = text)
+            return childNode
+        found := FindSnippetNodeIn(childNode, text)
+        if found
+            return found
+        childNode := TV.GetNext(childNode)
+    }
+    return 0
 }
 
 ; === 內容驗證相關 ===
